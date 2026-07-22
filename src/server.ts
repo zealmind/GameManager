@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import eventRoutes from './routes/eventRoutes';
 import playerRoutes from './routes/playerRoutes';
 import gameRoutes from './routes/gameRoutes';
@@ -8,6 +9,8 @@ const app = express();
 const PORT = process.env.PORT || 0;
 
 app.use(express.json());
+
+app.use(cors());
 
 // Serve static frontend
 app.use(express.static(path.join(process.cwd(), 'public')));

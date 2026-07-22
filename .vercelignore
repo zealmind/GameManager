@@ -1,0 +1,13 @@
+src/
+node_modules/
+.git/
+*.db
+*.db-wal
+.server.pid
+debug-schedule.ts
+package-lock.json
+tsconfig.json
+jest.config.js
+render.yaml
+start_server.ps1
+stop_server.ps1

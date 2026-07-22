@@ -1,4 +1,4 @@
-const API_BASE = window.location.origin;
+const API_BASE = (window.__API_BASE__ && window.__API_BASE__.replace(/\/$/, '')) || window.location.origin;
 let currentEventId = null;
 
 const app = document.getElementById('main-content');

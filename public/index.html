@@ -27,5 +27,21 @@
     </div>
 
     <script src="app.js"></script>
+    <script id="config" type="application/json">
+      {"apiBase": "API_BASE_PLACEHOLDER"}
+    </script>
+    <script>
+      (function() {
+        const configEl = document.getElementById('config');
+        if (configEl && configEl.textContent) {
+          try {
+            const cfg = JSON.parse(configEl.textContent);
+            if (cfg.apiBase && cfg.apiBase !== 'API_BASE_PLACEHOLDER') {
+              window.__API_BASE__ = cfg.apiBase;
+            }
+          } catch (e) {}
+        }
+      })();
+    </script>
 </body>
 </html>

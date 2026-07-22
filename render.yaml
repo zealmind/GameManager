@@ -7,7 +7,7 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: libsql://gamemanager-class-raja.aws-ap-south-1.turso.io
-        sync: false
-      - key: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODQ3MzY5MTksImlkIjoiMDE5ZjhhOTgtNTkwMS03ODAyLWJhNGQtM2E4OWFmMTYwODNmIiwia2lkIjoiOGxXZEVsYUpITE9HYVpNbDdOSnVUUEduakxSaTFyUmlSM1c2OEtDVWdKYyIsInJpZCI6IjQ2OTdlZmY3LTgxYjctNGE0OS05ZGQ0LTU3ZWQ3YzBmZjliNSJ9.zw2MPY7T59LmIRa2ZSfHDBe7TVHRuUE4Cf-pfOwqJr5fvKpHZ6KATyr6Zvp795CTusNCby6roM3_4X5_tq-jDg
-        sync: false
+      - key: TURSO_DATABASE_URL
+        value: libsql://gamemanager-class-raja.aws-ap-south-1.turso.io
+      - key: TURSO_AUTH_TOKEN
+        value: eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3ODQ3MzY5MTksImlkIjoiMDE5ZjhhOTgtNTkwMS03ODAyLWJhNGQtM2E4OWFmMTYwODNmIiwia2lkIjoiOGxXZEVsYUpITE9HYVpNbDdOSnVUUEduakxSaTFyUmlSM1c2OEtDVWdKYyIsInJpZCI6IjQ2OTdlZmY3LTgxYjctNGE0OS05ZGQ0LTU3ZWQ3YzBmZjliNSJ9.zw2MPY7T59LmIRa2ZSfHDBe7TVHRuUE4Cf-pfOwqJr5fvKpHZ6KATyr6Zvp795CTusNCby6roM3_4X5_tq-jDg
