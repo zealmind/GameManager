@@ -3,7 +3,7 @@ services:
     name: gamemanager-backend
     runtime: node
     buildCommand: npm install && npm run build
-    startCommand: npm run start
+    startCommand: node dist/index.js
     envVars:
       - key: NODE_ENV
         value: production
