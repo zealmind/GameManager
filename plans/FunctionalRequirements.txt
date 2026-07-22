@@ -1,0 +1,80 @@
+Functional Requirement Document: Pickleball Event Scheduler
+
+1. Introduction
+
+This document outlines the functional requirements for a Pickleball Event Scheduler system. The system aims to manage pickleball game events, ensuring fair participation, random pairings, and efficient court utilization.
+
+2. Business Logic Requirements
+
+2.1 Event Management
+
+FR-001: Event Creation: Users shall be able to create a new pickleball event and assign it a unique name.
+Business Rule: Event names must be unique within a user's context (if user accounts were implemented; for now, assume unique within the system).
+FR-002: Event Persistence: Event data (including player lists, game history, and scheduling state) shall be saved and associated exclusively with that specific event. Data from one event shall not be accessible or influence another event.
+FR-003: Event Completion: An event is considered complete when a predefined total number of games have been played, and specific player participation goals have been met.
+2.2 Player Management
+
+FR-005: Player Registration: Within an event, users shall be able to register players by providing their names.
+Business Rule: A minimum of 4 players are required to initiate scheduling for a game.
+FR-006: Player Availability: Users shall be able to mark players as available or unavailable for participation at any given time during an event.
+Business Rule: Unavailable players are excluded from game scheduling until their status is changed back to available.
+FR-007: Game Count Tracking: The system shall track the number of games played by each player.
+FR-008: Target Game Count: Each player shall aim to play a specific target number of games (e.g., 6 games per event).
+Business Rule: If player availability changes, making the initial target difficult, the system should dynamically adjust targets to distribute remaining game slots as fairly as possible among available players, while still aiming for the overall event game count.
+2.3 Game Scheduling
+
+FR-010: Random Pairings: When scheduling a game, the system shall randomly assign players into teams (partners).
+FR-011: Random Opponents: The system shall randomly assign opposing teams.
+FR-012: Non-Repeating Partners: A player shall not be paired with the same partner more than once within an event.
+FR-013: Game Assignment Prioritization: When selecting players for a new game from the available pool (waiting players + players who just finished a game and are available), the system shall prioritize players who are furthest below their current target game count.
+Business Rule: Tie-breaking for prioritization should involve randomness to ensure variety.
+FR-014: Court Assignment: Games shall be assigned to available courts.
+FR-015: Game Completion: The system shall record the score for a completed game.
+Business Rule: A game is only considered completed once a score is submitted.
+FR-016: Scheduling Deadlock Handling: If a game cannot be scheduled due to constraints (e.g., insufficient players, partner conflicts, or inability to meet targets), the system shall:
+Halt the start of the next game.
+Display a clear reason for the halt, citing the blocking constraints.
+3. User Flow
+
+3.1 Event Creation and Player Setup
+
+Start Application: User launches the application.
+Create Event:
+User is prompted to enter a name for the new event.
+User submits the event name.
+System creates a new, isolated event instance.
+Add Players:
+User registers players for the newly created event by entering their names.
+User can mark players as available or unavailable.
+User finalizes the player list for the event.
+3.2 Game Management
+
+View Game State:
+The system displays the current status of all courts (occupied or available).
+For occupied courts, it shows the players currently in the game (Team A vs. Team B).
+It displays lists of players who are waiting to play and those marked as unavailable.
+It shows the number of games completed and the target games per player.
+Start a New Game:
+User selects an available court.
+System checks if there are at least 4 available players.
+System identifies valid player groupings and team pairings based on availability, target games, and non-repeating partner rules.
+If a valid game can be scheduled:
+System assigns 4 players to the selected court.
+Player status changes to 'PLAYING'.
+Court status changes to 'OCCUPIED'.
+If no valid game can be scheduled (due to player availability or partner conflicts):
+System halts the game start.
+A message is displayed explaining why the game could not be started.
+Submit Game Score:
+Once a game on a court is finished, the user enters the scores for Team A and Team B.
+User submits the scores.
+System records the completed game and scores.
+Player game counts are updated, partners are recorded, and players return to the 'WAITING' pool.
+The court status changes to 'AVAILABLE'.
+The system recalculates player targets and checks for scheduling blocks.
+Toggle Player Availability:
+User can change a player's status between 'WAITING' and 'UNAVAILABLE'.
+System updates player status and recalculates targets or checks for scheduling blocks if necessary.
+Event Completion:
+The system indicates when the event is complete (all required games played, and player targets met as closely as possible given availability).
+
