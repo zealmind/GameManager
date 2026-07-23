@@ -162,7 +162,7 @@ function logout() {
     switchView('dashboard');
 }
 
-function showLoginModal() {
+async function showLoginModal() {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay active';
     overlay.id = 'login-modal';
