@@ -767,6 +767,24 @@ html, body {
     transition: background 0.2s, transform 0.15s;
 }
 
+.auth-debug {
+    position: absolute;
+    bottom: 28%;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    padding: 6px 12px;
+    background: rgba(0,0,0,0.6);
+    color: #fbbf24;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 6px;
+    white-space: nowrap;
+    max-width: 90%;
+    text-align: center;
+    pointer-events: none;
+}
+
 .enter-btn:active {
     transform: translateX(-50%) scale(0.96);
     background: rgba(0,0,0,0.6);

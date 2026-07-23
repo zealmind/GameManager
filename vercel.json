@@ -3,5 +3,8 @@
   "framework": null,
   "buildCommand": "node scripts/build-vercel.js",
   "outputDirectory": ".vercel/output/static",
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "env": {
+    "API_BASE_URL": "https://gamemanager-backend.onrender.com"
+  }
 }

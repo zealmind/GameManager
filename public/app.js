@@ -85,18 +85,23 @@ function initWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
     const btn = document.getElementById('enter-btn');
+    const debug = document.getElementById('auth-debug');
 
     if (!screen || !video || !btn) return;
+
+    console.log('[welcome] init start', { API_BASE, hasToken: !!getToken() });
 
     video.muted = true;
     video.volume = 0;
     video.play().catch(() => {
+        console.log('[welcome] video autoplay blocked');
         btn.textContent = '▶ Play & Enter';
     });
 
     checkAuthState();
 
     btn.onclick = () => {
+        console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn() });
         screen.classList.remove('active');
         video.pause();
         if (isLoggedIn()) {
@@ -107,30 +112,48 @@ function initWelcomeScreen() {
     };
 }
 
+function setDebug(msg) {
+    const debug = document.getElementById('auth-debug');
+    if (!debug) return;
+    debug.textContent = msg;
+    console.log('[auth-debug]', msg);
+}
+
 async function checkAuthState() {
     const btn = document.getElementById('enter-btn');
+    const debug = document.getElementById('auth-debug');
     if (!btn) return;
 
     const token = getToken();
+    console.log('[auth] check start', { token: !!token, API_BASE });
+
     if (!token) {
+        console.log('[auth] no token -> Login/Sign Up');
         btn.textContent = 'Login / Sign Up';
+        setDebug('No session found');
         return;
     }
 
     if (!API_BASE || API_BASE === 'null') {
-        console.warn('[auth] No API_BASE — cannot verify session');
+        console.log('[auth] no API_BASE -> Login/Sign Up');
         btn.textContent = 'Login / Sign Up';
+        setDebug('Cannot connect — open via http://localhost:4444');
         return;
     }
 
     try {
+        setDebug('Verifying session...');
+        console.log('[auth] calling /auth/me at', `${API_BASE}/auth/me`);
         const user = await api(`${API_BASE}/auth/me`, { timeoutMs: 4000 });
+        console.log('[auth] session valid', user.user.name);
         setUser(user.user);
         btn.textContent = 'Enter Site';
+        setDebug(`Logged in as ${user.user.name}`);
     } catch (err) {
-        console.warn('[auth] Session check failed:', err.message);
+        console.warn('[auth] session check failed:', err.message);
         clearUser();
         btn.textContent = 'Login / Sign Up';
+        setDebug(`Session invalid: ${err.message}`);
     }
 }
 
