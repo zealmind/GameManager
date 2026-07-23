@@ -276,7 +276,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     ${court.game && court.game.started ? '<span class="text-muted">In Progress</span>' : ''}
                     ${court.game && !court.game.started ? '<span class="text-muted">Allotted</span>' : ''}
                     ${!court.game ? '<span class="text-muted">Available</span>' : ''}
-                    ${!court.game && !deadlockError ? `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>` : ''}
+                    ${!court.game && !deadlockError ? `<button class="btn btn-primary btn-sm manual-allot-btn" data-court-id="${court.courtId}">Manual Allot</button>` : ''}
                 </div>
             </div>
             <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
@@ -561,34 +561,11 @@ function bindEventDetailActions(eventId, event, status) {
             });
         });
     } else {
-        container.querySelectorAll('.allot-btn').forEach(btn => {
+        container.querySelectorAll('.manual-allot-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const courtId = btn.dataset.courtId;
-                btn.disabled = true;
-                btn.textContent = 'Allotting...';
-                try {
-                    const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
-                    if (res.status && res.status === 'WAITING' && res.message) {
-                        deadlockCourtErrors.set(courtId, res.message);
-                        showToast(`Court ${courtId}: ${res.message}`);
-                        loadEventDetail(eventId);
-                    } else {
-                        deadlockCourtErrors.delete(courtId);
-                        showToast(`Court ${courtId} allotted`);
-                        loadEventDetail(eventId);
-                    }
-                } catch (err) {
-                    if (err.message && err.message.includes('No valid partner/opponent combination found')) {
-                        deadlockCourtErrors.set(courtId, err.message);
-                        showToast(`Court ${courtId}: Cannot allot right now`);
-                        loadEventDetail(eventId);
-                    } else {
-                        deadlockCourtErrors.set(courtId, err.message);
-                        showToast(err.message);
-                        loadEventDetail(eventId);
-                    }
-                }
+                openManualAllotModal(eventId, courtId);
             });
         });
 
@@ -948,6 +925,141 @@ function resolvePlayerName(playerId, status) {
     const player = status.players.find(p => p.id === playerId);
     if (player) return escapeHtml(player.name);
     return playerId.slice(0, 8);
+}
+
+function openManualAllotModal(eventId, courtId) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Manual Allotment - Court ${courtId}</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="manual-allot-form">
+                <div class="team-section">
+                    <div class="team-title">Team 1</div>
+                    <div class="form-group">
+                        <label>Player 1</label>
+                        <select class="manual-allot-select" data-team="1" data-slot="0"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Player 2 (Partner)</label>
+                        <select class="manual-allot-select partner-select" data-team="1" data-slot="1"></select>
+                    </div>
+                </div>
+                <div class="team-divider"></div>
+                <div class="team-section">
+                    <div class="team-title">Team 2</div>
+                    <div class="form-group">
+                        <label>Player 1</label>
+                        <select class="manual-allot-select" data-team="2" data-slot="0"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Player 2 (Partner)</label>
+                        <select class="manual-allot-select partner-select" data-team="2" data-slot="1"></select>
+                    </div>
+                </div>
+                <div id="manual-allot-error" class="manual-allot-error" style="display:none;"></div>
+                <button type="button" class="btn btn-success" id="confirm-manual-allot">Confirm Allotment</button>
+                <button type="button" class="btn btn-secondary mt-1" id="cancel-manual-allot">Cancel</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    let currentEventId = eventId;
+    let currentCourtId = courtId;
+
+    api(`${API_BASE}/events/${eventId}/status`).then(status => {
+        const waiting = status.players.filter(p => p.status === 'WAITING');
+        const selects = overlay.querySelectorAll('.manual-allot-select');
+
+        function renderOptions(team, slot, excludeIds) {
+            const select = overlay.querySelector(`.manual-allot-select[data-team="${team}"][data-slot="${slot}"]`);
+            if (!select) return;
+            const currentValue = select.value;
+            const partnerId = overlay.querySelector(`.manual-allot-select[data-team="${team}"][data-slot="${slot === 0 ? 1 : 0}"]`)?.value;
+            const available = waiting.filter(p => !excludeIds.has(p.id));
+
+            let options = available.map(p => {
+                const partnerIds = p.partnerIds || [];
+                const hasPartnered = partnerId && partnerIds.includes(partnerId);
+                const label = escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name);
+                return { id: p.id, label, hasPartnered };
+            });
+
+            if (partnerId && slot === 1) {
+                options.sort((a, b) => {
+                    if (a.hasPartnered === b.hasPartnered) return 0;
+                    return a.hasPartnered ? 1 : -1;
+                });
+            }
+
+            select.innerHTML = '<option value="">-- Select Player --</option>' +
+                options.map(o => {
+                    if (o.hasPartnered) {
+                        return `<option value="${o.id}" ${o.id === currentValue ? 'selected' : ''}>${o.label} ⚠️ Paired already</option>`;
+                    }
+                    return `<option value="${o.id}" ${o.id === currentValue ? 'selected' : ''}>${o.label}</option>`;
+                }).join('');
+        }
+
+        selects.forEach(select => {
+            const team = parseInt(select.dataset.team);
+            const slot = parseInt(select.dataset.slot);
+            const excludeIds = new Set(Array.from(selects).map(s => s.value).filter(Boolean));
+
+            renderOptions(team, slot, excludeIds);
+
+            select.addEventListener('change', () => {
+                const allValues = Array.from(selects).map(s => s.value).filter(Boolean);
+                selects.forEach(s => {
+                    const otherIds = new Set([...allValues].filter(id => id !== s.value));
+                    renderOptions(parseInt(s.dataset.team), parseInt(s.dataset.slot), otherIds);
+                });
+            });
+        });
+    });
+
+    document.getElementById('cancel-manual-allot').addEventListener('click', () => overlay.remove());
+
+    document.getElementById('confirm-manual-allot').addEventListener('click', async () => {
+        const selects = overlay.querySelectorAll('.manual-allot-select');
+        const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
+        const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
+
+        const team1 = [team1Slots[0].value, team1Slots[1].value];
+        const team2 = [team2Slots[0].value, team2Slots[1].value];
+
+        const errorEl = document.getElementById('manual-allot-error');
+        const missing = [];
+        if (!team1[0] || !team1[1]) missing.push('Team 1 needs 2 players');
+        if (!team2[0] || !team2[1]) missing.push('Team 2 needs 2 players');
+        if (new Set([...team1, ...team2].filter(Boolean)).size !== 4) missing.push('All 4 players must be distinct');
+
+        if (missing.length) {
+            errorEl.textContent = missing.join(', ');
+            errorEl.style.display = 'block';
+            return;
+        }
+        errorEl.style.display = 'none';
+
+        try {
+            const res = await api(`${API_BASE}/events/${currentEventId}/courts/${currentCourtId}/allot-manual`, {
+                method: 'POST',
+                body: JSON.stringify({ team1, team2 })
+            });
+            showToast(`Court ${currentCourtId} manually allotted`);
+            overlay.remove();
+            loadEventDetail(currentEventId);
+        } catch (err) {
+            errorEl.textContent = err.message;
+            errorEl.style.display = 'block';
+        }
+    });
 }
 
 // Initialize

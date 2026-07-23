@@ -147,7 +147,6 @@ class SchedulingService {
                 }
             }
         }
-        event.recalculateTargetGames();
         return { success: true, game };
     }
 }

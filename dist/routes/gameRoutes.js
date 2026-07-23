@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const Database_1 = require("../storage/Database");
 const SchedulingService_1 = require("../services/SchedulingService");
+const Game_1 = require("../models/Game");
 const router = (0, express_1.Router)();
 const db = Database_1.Database.getInstance();
 const schedulingService = new SchedulingService_1.SchedulingService();
@@ -57,6 +58,51 @@ router.post('/:eventId/schedule', async (req, res) => {
         }
         await db.persist();
         res.status(201).json(result.game);
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// POST /events/:eventId/courts/:courtId/allot-manual - Manual allotment with specific players
+router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
+    try {
+        const event = db.getEvent(req.params.eventId);
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+        if (!event.isStarted()) {
+            return res.status(400).json({ error: 'Event has not started yet' });
+        }
+        const courtId = parseInt(req.params.courtId, 10);
+        const alreadyActive = event.games.find(g => !g.completed && g.courtId === courtId);
+        if (alreadyActive) {
+            return res.status(400).json({ error: `Court ${courtId} is already allotted` });
+        }
+        const { team1, team2 } = req.body || {};
+        if (!team1 || !Array.isArray(team1) || team1.length !== 2 ||
+            !team2 || !Array.isArray(team2) || team2.length !== 2) {
+            return res.status(400).json({ error: 'Must provide team1 and team2 arrays with 2 players each' });
+        }
+        const allPlayerIds = [...team1, ...team2];
+        if (new Set(allPlayerIds).size !== 4) {
+            return res.status(400).json({ error: 'All 4 players must be distinct' });
+        }
+        for (const pid of allPlayerIds) {
+            const reg = event.getRegistration(pid);
+            if (!reg) {
+                return res.status(400).json({ error: `Player is not registered for this event` });
+            }
+            if (reg.status !== 'WAITING') {
+                return res.status(400).json({ error: `Player is not available (status: ${reg.status})` });
+            }
+        }
+        const game = (0, Game_1.createGame)(req.params.eventId, courtId, [team1[0], team1[1], team2[0], team2[1]]);
+        for (const pid of allPlayerIds) {
+            event.updateRegistration(pid, { status: 'PLAYING' });
+        }
+        event.games.push(game);
+        await db.persist();
+        res.status(201).json(game);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -238,7 +284,8 @@ router.get('/:eventId/status', (req, res) => {
                     nickName: p.nickName,
                     gamesPlayed: reg?.gamesPlayedCount || 0,
                     status: reg?.status || 'UNKNOWN',
-                    partners: partnerNames
+                    partners: partnerNames,
+                    partnerIds
                 };
             }),
             activeGames: activeGames.map(g => ({
