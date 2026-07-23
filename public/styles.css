@@ -55,6 +55,11 @@ html, body {
     font-weight: 700;
 }
 
+.app-subtitle {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
 .header-actions {
     display: flex;
     gap: 4px;
@@ -563,12 +568,6 @@ html, body {
 }
 
 /* Court game card */
-.court-game-card {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 6px;
-}
-
 .court-scores {
     display: flex;
     flex-direction: column;
@@ -655,5 +654,9 @@ html, body {
 
 /* Completed games collapsible */
 .completed-games-collapsed {
+    display: none;
+}
+
+.players-section-collapsed {
     display: none;
 }

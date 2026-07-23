@@ -231,7 +231,6 @@ function renderRegistrationPhase(event, status) {
                     <div class="player-row">
                         <div class="player-info">
                             <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
-                            <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${(p.partners || []).map(nick => escapeHtml(nick)).join(', ') || 'None'}</div>
                         </div>
                         <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${p.id}">Unregister</button>
                     </div>
@@ -312,7 +311,6 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                         <div class="player-row">
                             <div class="player-info">
                                 <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
-                                <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${(p.partners || []).map(nick => escapeHtml(nick)).join(', ') || 'None'}</div>
                             </div>
                             ${showActions ? getPlayerActionButtons(p) : ''}
                         </div>
@@ -342,13 +340,15 @@ function renderGamePhase(event, status, activeGames, completedGames) {
 
         <div class="card">
             <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px;">Players</div>
-                <button class="btn btn-primary btn-sm" id="add-players-btn">+ Add Players</button>
+                <div class="card-title" style="font-size:16px; cursor:pointer;" id="players-toggle">Players &#9662;</div>
+                ${!status.isStarted ? `<button class="btn btn-primary btn-sm" id="add-players-btn">+ Add Players</button>` : ''}
             </div>
-            ${renderPlayerGroup('Waiting', waiting, true)}
-            ${renderPlayerGroup('Playing', playing, false)}
-            ${renderPlayerGroup('Away', away, true)}
-            ${renderPlayerGroup('Retired', retired, false)}
+            <div id="players-list" class="${status.isStarted ? 'players-section-collapsed' : ''}">
+                ${renderPlayerGroup('Waiting', waiting, true)}
+                ${renderPlayerGroup('Playing', playing, false)}
+                ${renderPlayerGroup('Away', away, true)}
+                ${renderPlayerGroup('Retired', retired, false)}
+            </div>
         </div>
 
         <div class="card">
@@ -363,7 +363,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                             <div class="game-team">Team 2: ${g.players.team2.map(id => resolvePlayerName(id, status)).join(', ')}</div>
                             <div class="game-status status-completed">Completed</div>
                             <div class="game-meta">
-                                ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
+                                court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
                                 ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
                                 ${g.startedAt && g.completedAt ? ` | Duration: ${formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())}` : ''}
                             </div>
@@ -393,11 +393,11 @@ function renderGamePhase(event, status, activeGames, completedGames) {
 function getPlayerActionButtons(player) {
     if (player.status === 'WAITING') {
         return `
-            <button class="btn btn-warning btn-sm status-action-btn" data-player-id="${player.id}" data-status="AWAY">Away</button>
+            <button class="btn btn-warning btn-sm status-action-btn" data-player-id="${player.id}" data-status="AWAY">Take Break</button>
             <button class="btn btn-danger btn-sm status-action-btn" data-player-id="${player.id}" data-status="RETIRED">Retire</button>
         `;
     } else if (player.status === 'AWAY') {
-        return `<button class="btn btn-success btn-sm status-action-btn" data-player-id="${player.id}" data-status="WAITING">Come Back</button>`;
+        return `<button class="btn btn-success btn-sm status-action-btn" data-player-id="${player.id}" data-status="WAITING">I'm Ready</button>`;
     }
     return '';
 }
@@ -419,6 +419,13 @@ function formatDuration(ms) {
         return `${minutes}m ${seconds}s`;
     }
     return `${seconds}s`;
+}
+
+function randomValidScore() {
+    const score1 = 11 + Math.floor(Math.random() * 6); // 11-16
+    const max2 = Math.max(0, score1 - 2);
+    const score2 = Math.floor(Math.random() * (max2 + 1)); // 0 to max2
+    return [score1, score2];
 }
 
 function renderLeaderboard(status, completedGames) {
@@ -465,11 +472,13 @@ function renderLeaderboard(status, completedGames) {
             ${sorted.map((p, idx) => {
                 const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
                 const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
+                const partnersStr = (p.partners || []).map(nick => escapeHtml(nick)).join(', ') || 'None';
                 return `
                 <div class="leaderboard-row">
                     <div class="leaderboard-rank">${idx + 1}</div>
                     <div class="leaderboard-player">
                         <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
+                        <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${partnersStr}</div>
                     </div>
                     <div class="leaderboard-stat">${s.wins} <span class="text-muted">wins</span></div>
                     <div class="leaderboard-stat">${diffStr} <span class="text-muted">diff</span></div>
@@ -573,8 +582,11 @@ function bindEventDetailActions(eventId, event, status) {
                 const gameId = btn.dataset.gameId;
                 const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
                 const inputs = card.querySelectorAll('.score-input');
-                const score1 = parseInt(inputs[0].value) || 0;
-                const score2 = parseInt(inputs[1].value) || 0;
+                let score1 = parseInt(inputs[0].value) || 0;
+                let score2 = parseInt(inputs[1].value) || 0;
+                if (score1 === 0 && score2 === 0) {
+                    [score1, score2] = randomValidScore();
+                }
                 try {
                     const res = await api(`${API_BASE}/events/${eventId}/games/${gameId}/end`, {
                         method: 'POST',
@@ -653,6 +665,15 @@ function bindEventDetailActions(eventId, event, status) {
         completedGamesToggle.addEventListener('click', () => {
             const isCollapsed = completedGamesList.classList.toggle('completed-games-collapsed');
             completedGamesToggle.innerHTML = `Completed Games ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+        });
+    }
+
+    const playersList = document.getElementById('players-list');
+    const playersToggle = document.getElementById('players-toggle');
+    if (playersList && playersToggle) {
+        playersToggle.addEventListener('click', () => {
+            const isCollapsed = playersList.classList.toggle('players-section-collapsed');
+            playersToggle.innerHTML = `Players ${isCollapsed ? '&#9662;' : '&#9652;'}`;
         });
     }
 }
