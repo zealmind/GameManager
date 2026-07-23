@@ -20,8 +20,12 @@ class Database {
         this.players = new Map();
         this.events = new Map();
         this.eventRegistrations = new Map();
+        const dbUrl = process.env.TURSO_DATABASE_URL;
+        if (!dbUrl) {
+            throw new Error('TURSO_DATABASE_URL is required');
+        }
         this.client = (0, client_1.createClient)({
-            url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+            url: dbUrl,
             authToken: process.env.TURSO_AUTH_TOKEN,
         });
     }

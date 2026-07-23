@@ -38,22 +38,35 @@ function showToast(msg) {
 
 async function api(url, options = {}) {
     const token = getToken();
-    const res = await fetch(url, {
-        headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        ...options
-    });
-    if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Request failed' }));
-        if (res.status === 401) {
-            clearUser();
-            showLoginModal();
+    const controller = new AbortController();
+    const timeoutMs = options.timeoutMs || 6000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const res = await fetch(url, {
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {})
+            },
+            signal: controller.signal,
+            ...options
+        });
+        clearTimeout(timeoutId);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'Request failed' }));
+            if (res.status === 401) {
+                clearUser();
+                showLoginModal();
+            }
+            throw new Error(err.error || `HTTP ${res.status}`);
         }
-        throw new Error(err.error || `HTTP ${res.status}`);
+        return res.json();
+    } catch (err) {
+        clearTimeout(timeoutId);
+        if (err.name === 'AbortError') {
+            throw new Error('Request timed out');
+        }
+        throw err;
     }
-    return res.json();
 }
 
 function switchView(view) {
@@ -105,36 +118,19 @@ async function checkAuthState() {
     }
 
     if (!API_BASE || API_BASE === 'null') {
+        console.warn('[auth] No API_BASE — cannot verify session');
         btn.textContent = 'Login / Sign Up';
         return;
     }
 
-    const timeoutMs = 1500;
-    let resolved = false;
-
-    const timeoutHandle = setTimeout(() => {
-        if (!resolved) {
-            resolved = true;
-            clearUser();
-            btn.textContent = 'Login / Sign Up';
-        }
-    }, timeoutMs);
-
     try {
-        const user = await api(`${API_BASE}/auth/me`);
-        if (!resolved) {
-            resolved = true;
-            clearTimeout(timeoutHandle);
-            setUser(user.user);
-            btn.textContent = 'Enter Site';
-        }
-    } catch {
-        if (!resolved) {
-            resolved = true;
-            clearTimeout(timeoutHandle);
-            clearUser();
-            btn.textContent = 'Login / Sign Up';
-        }
+        const user = await api(`${API_BASE}/auth/me`, { timeoutMs: 4000 });
+        setUser(user.user);
+        btn.textContent = 'Enter Site';
+    } catch (err) {
+        console.warn('[auth] Session check failed:', err.message);
+        clearUser();
+        btn.textContent = 'Login / Sign Up';
     }
 }
 
@@ -200,6 +196,20 @@ function showLoginModal() {
     const authError = document.getElementById('auth-error');
     const loginForm = document.getElementById('login-form');
     const signupForm = document.getElementById('signup-form');
+
+    if (!API_BASE || API_BASE === 'null') {
+        authError.textContent = 'Cannot connect to server. Open the app via http://localhost:4444 or deploy it.';
+        authError.classList.remove('hidden');
+        loginForm.querySelectorAll('input, button[type="submit"]').forEach(el => el.disabled = true);
+        signupForm.querySelectorAll('input, button[type="submit"]').forEach(el => el.disabled = true);
+        return;
+    }
+
+    try {
+        await api(`${API_BASE}/auth/me`, { method: 'GET', timeoutMs: 4000 });
+    } catch {
+        // not logged in — modal is ready for login/signup
+    }
 
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();

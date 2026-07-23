@@ -55,8 +55,12 @@ export class Database {
     this.events = new Map<string, Event>();
     this.eventRegistrations = new Map<string, EventPlayerRegistration>();
     
+    const dbUrl = process.env.TURSO_DATABASE_URL;
+    if (!dbUrl) {
+      throw new Error('TURSO_DATABASE_URL is required');
+    }
     this.client = createClient({
-      url: process.env.TURSO_DATABASE_URL || 'file:local.db',
+      url: dbUrl,
       authToken: process.env.TURSO_AUTH_TOKEN,
     });
   }
