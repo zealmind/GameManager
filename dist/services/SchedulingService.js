@@ -135,7 +135,12 @@ class SchedulingService {
             const reg = event.getRegistration(playerId);
             if (reg) {
                 reg.gamesPlayedCount++;
-                reg.status = 'WAITING';
+                if (reg.gamesPlayedCount >= reg.targetGames) {
+                    reg.status = 'AWAY';
+                }
+                else {
+                    reg.status = 'WAITING';
+                }
                 const teammate = allPlayerIds.find(pid => pid !== playerId && team1Ids.has(pid) === team1Ids.has(playerId));
                 if (teammate && !reg.partners.includes(teammate)) {
                     reg.partners.push(teammate);

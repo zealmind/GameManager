@@ -99,6 +99,9 @@ router.patch('/:eventId/players/:playerId', async (req, res) => {
         if (!updated) {
             return res.status(404).json({ error: 'Player registration not found for this event' });
         }
+        if (status === 'WAITING') {
+            event.recalculateTargetGames();
+        }
         await db.persist();
         res.json(updated);
     }

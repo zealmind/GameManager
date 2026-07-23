@@ -1,5 +1,7 @@
 const API_BASE = (window.__API_BASE__ && window.__API_BASE__.replace(/\/$/, '')) || window.location.origin;
 let currentEventId = null;
+const deadlockCourts = new Set();
+let currentCompletedGamesFilter = '';
 
 const app = document.getElementById('main-content');
 const navBtns = document.querySelectorAll('.nav-btn');
@@ -137,13 +139,30 @@ function openCreateEventModal() {
     document.getElementById('create-event-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
+        const name = (fd.get('name') || '').trim();
+        const totalGamesToPlay = parseInt(fd.get('totalGamesToPlay'));
+        const numCourts = parseInt(fd.get('numCourts'));
+
+        if (!name) {
+            showToast('Event Name is required');
+            return;
+        }
+        if (!totalGamesToPlay || totalGamesToPlay < 1) {
+            showToast('Allowed Games per Player must be at least 1');
+            return;
+        }
+        if (!numCourts || numCourts < 1) {
+            showToast('Court Count must be at least 1');
+            return;
+        }
+
         try {
             await api(`${API_BASE}/events`, {
                 method: 'POST',
                 body: JSON.stringify({
-                    name: fd.get('name'),
-                    totalGamesToPlay: parseInt(fd.get('totalGamesToPlay')),
-                    numCourts: parseInt(fd.get('numCourts'))
+                    name,
+                    totalGamesToPlay,
+                    numCourts
                 })
             });
             overlay.remove();
@@ -288,9 +307,10 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                 </div>
             `;
         } else {
+            const isDeadlock = deadlockCourts.has(court.courtId);
             courtsHtml += `
                 <div class="text-muted" style="margin-bottom:8px;">Available</div>
-                <button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>
+                ${isDeadlock ? `<div class="court-deadlock-msg">Let's wait for the game on the other courts to get over and release players. Allotment may be possible after that.</div>` : `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>`}
             `;
         }
         courtsHtml += `</div>`;
@@ -354,9 +374,16 @@ function renderGamePhase(event, status, activeGames, completedGames) {
         <div class="card">
             <div class="flex justify-between items-center mb-2">
                 <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Completed Games &#9662;</div>
+                <select id="completed-games-player-filter" class="player-filter-select">
+                    <option value="">All Players</option>
+                    ${status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</option>`).join('')}
+                </select>
             </div>
             <div id="completed-games-list">
-                ${completedGames.length ? completedGames.map(g => `
+                ${completedGames.length ? completedGames.filter(g => {
+                    if (!currentCompletedGamesFilter) return true;
+                    return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
+                }).map(g => `
                     <div class="game-card completed-game-card" data-game-id="${g.id}">
                         <div class="game-teams">
                             <div class="game-team">Team 1: ${g.players.team1.map(id => resolvePlayerName(id, status)).join(', ')}</div>
@@ -538,12 +565,25 @@ function bindEventDetailActions(eventId, event, status) {
                 btn.textContent = 'Allotting...';
                 try {
                     const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
-                    showToast(`Court ${courtId} allotted`);
-                    loadEventDetail(eventId);
+                    if (res.status && res.status === 'WAITING' && res.message) {
+                        deadlockCourts.add(courtId);
+                        showToast(`Court ${courtId}: ${res.message}`);
+                        loadEventDetail(eventId);
+                    } else {
+                        deadlockCourts.delete(courtId);
+                        showToast(`Court ${courtId} allotted`);
+                        loadEventDetail(eventId);
+                    }
                 } catch (err) {
-                    showToast(err.message);
-                    btn.disabled = false;
-                    btn.textContent = 'Allot Players';
+                    if (err.message && err.message.includes('No valid partner/opponent combination found')) {
+                        deadlockCourts.add(courtId);
+                        showToast(`Court ${courtId}: Cannot allot right now`);
+                        loadEventDetail(eventId);
+                    } else {
+                        showToast(err.message);
+                        btn.disabled = false;
+                        btn.textContent = 'Allot Players';
+                    }
                 }
             });
         });
@@ -665,6 +705,14 @@ function bindEventDetailActions(eventId, event, status) {
         completedGamesToggle.addEventListener('click', () => {
             const isCollapsed = completedGamesList.classList.toggle('completed-games-collapsed');
             completedGamesToggle.innerHTML = `Completed Games ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+        });
+    }
+
+    const completedGamesFilter = document.getElementById('completed-games-player-filter');
+    if (completedGamesFilter) {
+        completedGamesFilter.addEventListener('change', (e) => {
+            currentCompletedGamesFilter = e.target.value;
+            loadEventDetail(eventId);
         });
     }
 

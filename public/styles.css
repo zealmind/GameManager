@@ -660,3 +660,23 @@ html, body {
 .players-section-collapsed {
     display: none;
 }
+
+.court-deadlock-msg {
+    margin-top: 8px;
+    padding: 8px;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 8px;
+    color: #92400e;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.player-filter-select {
+    font-size: 12px;
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    color: var(--text);
+}
