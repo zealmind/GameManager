@@ -81,12 +81,7 @@ function initWelcomeScreen() {
         btn.textContent = '▶ Play & Enter';
     });
 
-    btn.disabled = true;
-    btn.style.opacity = '0.7';
-    checkAuthState().then(() => {
-        btn.disabled = false;
-        btn.style.opacity = '1';
-    });
+    checkAuthState();
 
     btn.onclick = () => {
         screen.classList.remove('active');
@@ -100,22 +95,46 @@ function initWelcomeScreen() {
 }
 
 async function checkAuthState() {
-    const token = getToken();
     const btn = document.getElementById('enter-btn');
     if (!btn) return;
 
+    const token = getToken();
     if (!token) {
         btn.textContent = 'Login / Sign Up';
         return;
     }
 
+    if (!API_BASE || API_BASE === 'null') {
+        btn.textContent = 'Login / Sign Up';
+        return;
+    }
+
+    const timeoutMs = 1500;
+    let resolved = false;
+
+    const timeoutHandle = setTimeout(() => {
+        if (!resolved) {
+            resolved = true;
+            clearUser();
+            btn.textContent = 'Login / Sign Up';
+        }
+    }, timeoutMs);
+
     try {
         const user = await api(`${API_BASE}/auth/me`);
-        setUser(user.user);
-        btn.textContent = 'Enter Site';
+        if (!resolved) {
+            resolved = true;
+            clearTimeout(timeoutHandle);
+            setUser(user.user);
+            btn.textContent = 'Enter Site';
+        }
     } catch {
-        clearUser();
-        btn.textContent = 'Login / Sign Up';
+        if (!resolved) {
+            resolved = true;
+            clearTimeout(timeoutHandle);
+            clearUser();
+            btn.textContent = 'Login / Sign Up';
+        }
     }
 }
 
