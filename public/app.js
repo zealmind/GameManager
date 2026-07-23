@@ -344,8 +344,6 @@ navBtns.forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
 
-function loadEventsList() {
-
 function showBackButton() {
     return `<button class="icon-btn" id="back-btn">&#8592;</button>`;
 }
