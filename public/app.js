@@ -122,7 +122,7 @@ function openCreateEventModal() {
                     <input type="text" name="name" required placeholder="e.g. Friday Night Pickleball">
                 </div>
                 <div class="form-group">
-                    <label>Total Games to Play</label>
+                    <label>Allowed number of Games per player</label>
                     <input type="number" name="totalGamesToPlay" required min="1" value="18">
                 </div>
                 <div class="form-group">
@@ -268,8 +268,18 @@ function renderGamePhase(event, status, activeGames, completedGames) {
     const maxCourt = event.courts || 1;
     let courtsHtml = '';
     status.courts.forEach(court => {
-        courtsHtml += `<div class="court-card">
-            <div class="court-header">Court ${court.courtId}</div>`;
+        const deadlockError = deadlockCourtErrors.get(court.courtId);
+        courtsHtml += `<div class="court-card" data-court-id="${court.courtId}">
+            <div class="court-row">
+                <div class="court-header">Court ${court.courtId}</div>
+                <div class="court-status">
+                    ${court.game && court.game.started ? '<span class="text-muted">In Progress</span>' : ''}
+                    ${court.game && !court.game.started ? '<span class="text-muted">Allotted</span>' : ''}
+                    ${!court.game ? '<span class="text-muted">Available</span>' : ''}
+                    ${!court.game && !deadlockError ? `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>` : ''}
+                </div>
+            </div>
+            <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
         if (court.game && !court.game.started) {
             const g = court.game;
             const team1Names = g.team1.map(p => escapeHtml(p.name)).join(', ');
@@ -305,12 +315,6 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                         <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
                     </div>
                 </div>
-            `;
-        } else {
-            const deadlockError = deadlockCourtErrors.get(court.courtId);
-            courtsHtml += `
-                <div class="text-muted" style="margin-bottom:8px;">Available</div>
-                ${deadlockError ? `<div class="court-deadlock-msg">${escapeHtml(deadlockError)}</div>` : `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>`}
             `;
         }
         courtsHtml += `</div>`;
@@ -569,7 +573,6 @@ function bindEventDetailActions(eventId, event, status) {
                         deadlockCourtErrors.set(courtId, res.message);
                         showToast(`Court ${courtId}: ${res.message}`);
                         loadEventDetail(eventId);
-                        injectDeadlockMessage(eventId, courtId, res.message);
                     } else {
                         deadlockCourtErrors.delete(courtId);
                         showToast(`Court ${courtId} allotted`);
@@ -580,11 +583,10 @@ function bindEventDetailActions(eventId, event, status) {
                         deadlockCourtErrors.set(courtId, err.message);
                         showToast(`Court ${courtId}: Cannot allot right now`);
                         loadEventDetail(eventId);
-                        injectDeadlockMessage(eventId, courtId, err.message);
                     } else {
+                        deadlockCourtErrors.set(courtId, err.message);
                         showToast(err.message);
-                        btn.disabled = false;
-                        btn.textContent = 'Allot Players';
+                        loadEventDetail(eventId);
                     }
                 }
             });
@@ -946,34 +948,6 @@ function resolvePlayerName(playerId, status) {
     const player = status.players.find(p => p.id === playerId);
     if (player) return escapeHtml(player.name);
     return playerId.slice(0, 8);
-}
-
-function injectDeadlockMessage(eventId, courtId, message) {
-    setTimeout(() => {
-        const courtCards = document.querySelectorAll('.court-card');
-        courtCards.forEach(card => {
-            const header = card.querySelector('.court-header');
-            if (!header) return;
-            const headerText = header.textContent.trim();
-            if (headerText !== `Court ${courtId}`) return;
-
-            const existing = card.querySelector('.court-deadlock-msg');
-            if (existing) {
-                existing.textContent = message;
-                return;
-            }
-
-            const availableText = card.querySelector('.text-muted');
-            const allotBtn = card.querySelector('.allot-btn');
-            if (availableText && allotBtn) {
-                const msgDiv = document.createElement('div');
-                msgDiv.className = 'court-deadlock-msg';
-                msgDiv.textContent = message;
-                availableText.insertAdjacentElement('afterend', msgDiv);
-                allotBtn.remove();
-            }
-        });
-    }, 50);
 }
 
 // Initialize
