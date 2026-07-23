@@ -569,6 +569,7 @@ function bindEventDetailActions(eventId, event, status) {
                         deadlockCourtErrors.set(courtId, res.message);
                         showToast(`Court ${courtId}: ${res.message}`);
                         loadEventDetail(eventId);
+                        injectDeadlockMessage(eventId, courtId, res.message);
                     } else {
                         deadlockCourtErrors.delete(courtId);
                         showToast(`Court ${courtId} allotted`);
@@ -579,6 +580,7 @@ function bindEventDetailActions(eventId, event, status) {
                         deadlockCourtErrors.set(courtId, err.message);
                         showToast(`Court ${courtId}: Cannot allot right now`);
                         loadEventDetail(eventId);
+                        injectDeadlockMessage(eventId, courtId, err.message);
                     } else {
                         showToast(err.message);
                         btn.disabled = false;
@@ -944,6 +946,34 @@ function resolvePlayerName(playerId, status) {
     const player = status.players.find(p => p.id === playerId);
     if (player) return escapeHtml(player.name);
     return playerId.slice(0, 8);
+}
+
+function injectDeadlockMessage(eventId, courtId, message) {
+    setTimeout(() => {
+        const courtCards = document.querySelectorAll('.court-card');
+        courtCards.forEach(card => {
+            const header = card.querySelector('.court-header');
+            if (!header) return;
+            const headerText = header.textContent.trim();
+            if (headerText !== `Court ${courtId}`) return;
+
+            const existing = card.querySelector('.court-deadlock-msg');
+            if (existing) {
+                existing.textContent = message;
+                return;
+            }
+
+            const availableText = card.querySelector('.text-muted');
+            const allotBtn = card.querySelector('.allot-btn');
+            if (availableText && allotBtn) {
+                const msgDiv = document.createElement('div');
+                msgDiv.className = 'court-deadlock-msg';
+                msgDiv.textContent = message;
+                availableText.insertAdjacentElement('afterend', msgDiv);
+                allotBtn.remove();
+            }
+        });
+    }, 50);
 }
 
 // Initialize
