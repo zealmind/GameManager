@@ -1,6 +1,6 @@
 const API_BASE = (window.__API_BASE__ && window.__API_BASE__.replace(/\/$/, '')) || window.location.origin;
 let currentEventId = null;
-const deadlockCourts = new Set();
+const deadlockCourtErrors = new Map();
 let currentCompletedGamesFilter = '';
 
 const app = document.getElementById('main-content');
@@ -307,10 +307,10 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                 </div>
             `;
         } else {
-            const isDeadlock = deadlockCourts.has(court.courtId);
+            const deadlockError = deadlockCourtErrors.get(court.courtId);
             courtsHtml += `
                 <div class="text-muted" style="margin-bottom:8px;">Available</div>
-                ${isDeadlock ? `<div class="court-deadlock-msg">Let's wait for the game on the other courts to get over and release players. Allotment may be possible after that.</div>` : `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>`}
+                ${deadlockError ? `<div class="court-deadlock-msg">${escapeHtml(deadlockError)}</div>` : `<button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Allot Players</button>`}
             `;
         }
         courtsHtml += `</div>`;
@@ -566,17 +566,17 @@ function bindEventDetailActions(eventId, event, status) {
                 try {
                     const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
                     if (res.status && res.status === 'WAITING' && res.message) {
-                        deadlockCourts.add(courtId);
+                        deadlockCourtErrors.set(courtId, res.message);
                         showToast(`Court ${courtId}: ${res.message}`);
                         loadEventDetail(eventId);
                     } else {
-                        deadlockCourts.delete(courtId);
+                        deadlockCourtErrors.delete(courtId);
                         showToast(`Court ${courtId} allotted`);
                         loadEventDetail(eventId);
                     }
                 } catch (err) {
                     if (err.message && err.message.includes('No valid partner/opponent combination found')) {
-                        deadlockCourts.add(courtId);
+                        deadlockCourtErrors.set(courtId, err.message);
                         showToast(`Court ${courtId}: Cannot allot right now`);
                         loadEventDetail(eventId);
                     } else {
@@ -594,6 +594,7 @@ function bindEventDetailActions(eventId, event, status) {
                 const courtId = btn.dataset.courtId;
                 try {
                     await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
+                    deadlockCourtErrors.delete(courtId);
                     showToast('Allotment cancelled');
                     loadEventDetail(eventId);
                 } catch (err) {
