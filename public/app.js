@@ -41,6 +41,26 @@ function switchView(view) {
     }
 }
 
+function initWelcomeScreen() {
+    const screen = document.getElementById('welcome-screen');
+    const video = document.getElementById('welcome-video');
+    const btn = document.getElementById('enter-btn');
+
+    if (!screen || !video || !btn) return;
+
+    video.muted = true;
+    video.volume = 0;
+    video.play().catch(() => {
+        btn.textContent = '▶ Play & Enter';
+    });
+
+    btn.addEventListener('click', () => {
+        screen.classList.remove('active');
+        video.pause();
+        switchView('events');
+    });
+}
+
 navBtns.forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
@@ -276,7 +296,10 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     ${court.game && court.game.started ? '<span class="text-muted">In Progress</span>' : ''}
                     ${court.game && !court.game.started ? '<span class="text-muted">Allotted</span>' : ''}
                     ${!court.game ? '<span class="text-muted">Available</span>' : ''}
-                    ${!court.game && !deadlockError ? `<button class="btn btn-primary btn-sm manual-allot-btn" data-court-id="${court.courtId}">Manual Allot</button>` : ''}
+                    ${!court.game && !deadlockError ? `
+                        <button class="btn btn-primary btn-sm manual-allot-btn" data-court-id="${court.courtId}">Manual Allot</button>
+                        <button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Auto Allot</button>
+                    ` : ''}
                 </div>
             </div>
             <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
@@ -561,6 +584,37 @@ function bindEventDetailActions(eventId, event, status) {
             });
         });
     } else {
+        container.querySelectorAll('.allot-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const courtId = btn.dataset.courtId;
+                btn.disabled = true;
+                btn.textContent = 'Allotting...';
+                try {
+                    const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
+                    if (res.status && res.status === 'WAITING' && res.message) {
+                        deadlockCourtErrors.set(courtId, res.message);
+                        showToast(`Court ${courtId}: ${res.message}`);
+                        loadEventDetail(eventId);
+                    } else {
+                        deadlockCourtErrors.delete(courtId);
+                        showToast(`Court ${courtId} allotted`);
+                        loadEventDetail(eventId);
+                    }
+                } catch (err) {
+                    if (err.message && err.message.includes('No valid partner/opponent combination found')) {
+                        deadlockCourtErrors.set(courtId, err.message);
+                        showToast(`Court ${courtId}: Cannot allot right now`);
+                        loadEventDetail(eventId);
+                    } else {
+                        deadlockCourtErrors.set(courtId, err.message);
+                        showToast(err.message);
+                        loadEventDetail(eventId);
+                    }
+                }
+            });
+        });
+
         container.querySelectorAll('.manual-allot-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();

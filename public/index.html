@@ -8,6 +8,15 @@
 </head>
 <body>
     <div id="app">
+        <div id="welcome-screen" class="welcome-screen active">
+            <div class="welcome-video-wrapper">
+                <video id="welcome-video" autoplay muted loop playsinline>
+                    <source src="https://6rp3am1f7fy2hpjl.public.blob.vercel-storage.com/Welcome.mp4" type="video/mp4">
+                </video>
+                <div class="welcome-overlay"></div>
+                <button id="enter-btn" class="enter-btn">Enter Site</button>
+            </div>
+        </div>
         <header class="app-header">
             <h1>GameManager</h1>
             <div class="app-subtitle">Author: Raja K &bull; built with AI</div>
