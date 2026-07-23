@@ -8,6 +8,7 @@ const cors_1 = __importDefault(require("cors"));
 const eventRoutes_1 = __importDefault(require("./routes/eventRoutes"));
 const playerRoutes_1 = __importDefault(require("./routes/playerRoutes"));
 const gameRoutes_1 = __importDefault(require("./routes/gameRoutes"));
+const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const node_path_1 = __importDefault(require("node:path"));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 0;
@@ -15,12 +16,21 @@ app.use(express_1.default.json());
 app.use((0, cors_1.default)());
 // Serve static frontend
 app.use(express_1.default.static(node_path_1.default.join(process.cwd(), 'public')));
+// Public auth routes
+app.use('/auth', authRoutes_1.default);
 // API info endpoint
 app.get('/api', (req, res) => {
     res.json({
         message: 'GameManager API is running',
         version: '1.0.0',
         endpoints: {
+            auth: {
+                register: 'POST /auth/register',
+                login: 'POST /auth/login',
+                me: 'GET /auth/me',
+                github: 'GET /auth/github',
+                google: 'GET /auth/google'
+            },
             events: {
                 create: 'POST /events',
                 list: 'GET /events',

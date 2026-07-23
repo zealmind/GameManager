@@ -2,9 +2,27 @@ const API_BASE = (window.__API_BASE__ && window.__API_BASE__.replace(/\/$/, ''))
 let currentEventId = null;
 const deadlockCourtErrors = new Map();
 let currentCompletedGamesFilter = '';
+let currentUser = null;
 
 const app = document.getElementById('main-content');
 const navBtns = document.querySelectorAll('.nav-btn');
+
+function getToken() {
+  return localStorage.getItem('gm_token');
+}
+
+function setUser(user) {
+  currentUser = user;
+}
+
+function clearUser() {
+  currentUser = null;
+  localStorage.removeItem('gm_token');
+}
+
+function isLoggedIn() {
+  return !!getToken();
+}
 
 function showToast(msg) {
     let toast = document.querySelector('.toast');
@@ -19,12 +37,20 @@ function showToast(msg) {
 }
 
 async function api(url, options = {}) {
+    const token = getToken();
     const res = await fetch(url, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         ...options
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Request failed' }));
+        if (res.status === 401) {
+            clearUser();
+            showLoginModal();
+        }
         throw new Error(err.error || `HTTP ${res.status}`);
     }
     return res.json();
@@ -32,11 +58,12 @@ async function api(url, options = {}) {
 
 function switchView(view) {
     navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
-    if (view === 'events') {
-        currentEventId = null;
+    currentEventId = null;
+    if (view === 'dashboard') {
+        renderDashboard();
+    } else if (view === 'events') {
         renderEvents();
     } else if (view === 'players') {
-        currentEventId = null;
         renderPlayers();
     }
 }
@@ -54,16 +81,218 @@ function initWelcomeScreen() {
         btn.textContent = '▶ Play & Enter';
     });
 
-    btn.addEventListener('click', () => {
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+    checkAuthState().then(() => {
+        btn.disabled = false;
+        btn.style.opacity = '1';
+    });
+
+    btn.onclick = () => {
         screen.classList.remove('active');
         video.pause();
-        switchView('events');
+        if (isLoggedIn()) {
+            switchView('dashboard');
+        } else {
+            showLoginModal();
+        }
+    };
+}
+
+async function checkAuthState() {
+    const token = getToken();
+    const btn = document.getElementById('enter-btn');
+    if (!btn) return;
+
+    if (!token) {
+        btn.textContent = 'Login / Sign Up';
+        return;
+    }
+
+    try {
+        const user = await api(`${API_BASE}/auth/me`);
+        setUser(user.user);
+        btn.textContent = 'Enter Site';
+    } catch {
+        clearUser();
+        btn.textContent = 'Login / Sign Up';
+    }
+}
+
+function logout() {
+    clearUser();
+    switchView('dashboard');
+}
+
+function showLoginModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.id = 'login-modal';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Welcome</div>
+                <button class="modal-close" onclick="closeLoginModal()">&times;</button>
+            </div>
+            <div class="auth-tabs">
+                <button class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Login</button>
+                <button class="auth-tab" id="tab-signup" onclick="switchAuthTab('signup')">Sign Up</button>
+            </div>
+            <form id="login-form">
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="login-email" required placeholder="you@example.com">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="login-password" required placeholder="••••••">
+                </div>
+                <button type="submit" class="btn btn-primary">Login</button>
+            </form>
+            <form id="signup-form" class="hidden">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="signup-name" required placeholder="Your name">
+                </div>
+                <div class="form-group">
+                    <label>Email</label>
+                    <input type="email" id="signup-email" required placeholder="you@example.com">
+                </div>
+                <div class="form-group">
+                    <label>Password</label>
+                    <input type="password" id="signup-password" required placeholder="At least 6 characters">
+                </div>
+                <button type="submit" class="btn btn-primary">Sign Up</button>
+            </form>
+            <div class="auth-divider"><span>or</span></div>
+            <div class="social-login">
+                <button class="btn btn-social btn-github" id="btn-github-login">
+                    <span class="social-icon">&#128187;</span> Continue with GitHub
+                </button>
+                <button class="btn btn-social btn-google" id="btn-google-login">
+                    <span class="social-icon">&#127758;</span> Continue with Google
+                </button>
+            </div>
+            <div id="auth-error" class="auth-error hidden"></div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const authError = document.getElementById('auth-error');
+    const loginForm = document.getElementById('login-form');
+    const signupForm = document.getElementById('signup-form');
+
+    loginForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        authError.classList.add('hidden');
+        const email = document.getElementById('login-email').value;
+        const password = document.getElementById('login-password').value;
+        try {
+            const res = await api(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                body: JSON.stringify({ email, password })
+            });
+            localStorage.setItem('gm_token', res.token);
+            setUser(res.user);
+            closeLoginModal();
+            switchView('dashboard');
+            showToast('Welcome back!');
+        } catch (err) {
+            authError.textContent = err.message;
+            authError.classList.remove('hidden');
+        }
     });
+
+    signupForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        authError.classList.add('hidden');
+        const name = document.getElementById('signup-name').value;
+        const email = document.getElementById('signup-email').value;
+        const password = document.getElementById('signup-password').value;
+        try {
+            const res = await api(`${API_BASE}/auth/register`, {
+                method: 'POST',
+                body: JSON.stringify({ name, email, password })
+            });
+            localStorage.setItem('gm_token', res.token);
+            setUser(res.user);
+            closeLoginModal();
+            switchView('dashboard');
+            showToast('Account created!');
+        } catch (err) {
+            authError.textContent = err.message;
+            authError.classList.remove('hidden');
+        }
+    });
+
+    document.getElementById('btn-github-login').addEventListener('click', () => {
+        window.location.href = `${API_BASE}/auth/github?redirect_to=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+    });
+
+    document.getElementById('btn-google-login').addEventListener('click', () => {
+        window.location.href = `${API_BASE}/auth/google?redirect_to=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+    });
+}
+
+function closeLoginModal() {
+    const modal = document.getElementById('login-modal');
+    if (modal) modal.remove();
+}
+
+function switchAuthTab(tab) {
+    const loginForm = document.getElementById('login-form');
+    const signupForm = document.getElementById('signup-form');
+    const loginTab = document.getElementById('tab-login');
+    const signupTab = document.getElementById('tab-signup');
+    if (tab === 'login') {
+        loginForm.classList.remove('hidden');
+        signupForm.classList.add('hidden');
+        loginTab.classList.add('active');
+        signupTab.classList.remove('active');
+    } else {
+        loginForm.classList.add('hidden');
+        signupForm.classList.remove('hidden');
+        loginTab.classList.remove('active');
+        signupTab.classList.add('active');
+    }
+    document.getElementById('auth-error').classList.add('hidden');
+}
+
+function renderDashboard() {
+    const user = currentUser || { name: 'Player', email: '' };
+    app.innerHTML = `
+        <div class="dashboard-header">
+            <div class="user-info">
+                <div class="user-avatar">${escapeHtml(user.name.charAt(0).toUpperCase())}</div>
+                <div class="user-meta">
+                    <div class="user-name">${escapeHtml(user.name)}</div>
+                    <div class="user-email">${escapeHtml(user.email || '')}</div>
+                </div>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary btn-sm" id="logout-btn">Logout</button>
+            </div>
+        </div>
+        <div class="flex justify-between items-center mb-2">
+            <h2 class="card-title">My Events</h2>
+            <button class="btn btn-primary btn-sm" id="create-event-btn">+ New</button>
+        </div>
+        <div id="events-list">Loading...</div>
+    `;
+    document.getElementById('create-event-btn').addEventListener('click', openCreateEventModal);
+    document.getElementById('logout-btn').addEventListener('click', () => {
+        if (confirm('Logout? You will need to sign in again to access your events and players.')) {
+            logout();
+        }
+    });
+    loadEventsList();
 }
 
 navBtns.forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
 });
+
+function loadEventsList() {
 
 function showBackButton() {
     return `<button class="icon-btn" id="back-btn">&#8592;</button>`;
@@ -204,7 +433,7 @@ async function openEventDetail(eventId) {
         </div>
         <div id="event-detail">Loading...</div>
     `;
-    document.getElementById('back-btn').addEventListener('click', () => switchView('events'));
+    document.getElementById('back-btn').addEventListener('click', () => switchView('dashboard'));
     await loadEventDetail(eventId);
 }
 
@@ -1117,4 +1346,15 @@ function openManualAllotModal(eventId, courtId) {
 }
 
 // Initialize
-switchView('events');
+(function parseAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlToken = urlParams.get('token');
+    if (urlToken) {
+        localStorage.setItem('gm_token', urlToken);
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('token');
+        window.history.replaceState({}, '', newUrl.toString());
+    }
+})();
+
+initWelcomeScreen();

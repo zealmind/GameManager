@@ -2,8 +2,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const Database_1 = require("../storage/Database");
+const auth_1 = require("../middleware/auth");
 const router = (0, express_1.Router)();
 const db = Database_1.Database.getInstance();
+router.use(auth_1.authenticate);
 // POST /events - Create a new event
 router.post('/', async (req, res) => {
     try {
@@ -11,17 +13,18 @@ router.post('/', async (req, res) => {
         if (!name || totalGamesToPlay === undefined || numCourts === undefined) {
             return res.status(400).json({ error: 'Missing required fields: name, totalGamesToPlay, numCourts' });
         }
-        const event = await db.createEvent(name, totalGamesToPlay, numCourts);
+        const ownerId = req.user.id;
+        const event = await db.createEvent(name, totalGamesToPlay, numCourts, ownerId);
         res.status(201).json(event);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// GET /events - List all events
+// GET /events - List my events
 router.get('/', (req, res) => {
     try {
-        const events = db.getAllEvents();
+        const events = db.getEventsByOwner(req.user.id);
         res.json(events);
     }
     catch (err) {
@@ -29,11 +32,14 @@ router.get('/', (req, res) => {
     }
 });
 // GET /events/:eventId - Get event details
-router.get('/:eventId', (req, res) => {
+router.get('/:eventId', async (req, res) => {
     try {
         const event = db.getEvent(req.params.eventId);
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
+        }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
         }
         res.json(event);
     }
@@ -48,6 +54,9 @@ router.delete('/:eventId', async (req, res) => {
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
         await db.deleteEvent(req.params.eventId);
         res.json({ success: true });
     }
@@ -61,6 +70,9 @@ router.post('/:eventId/start', async (req, res) => {
         const event = db.getEvent(req.params.eventId);
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
+        }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
         }
         if (event.isStarted()) {
             return res.status(400).json({ error: 'Event has already started' });
@@ -79,6 +91,9 @@ router.delete('/:eventId/players/:playerId', async (req, res) => {
         const event = db.getEvent(req.params.eventId);
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
+        }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
         }
         if (event.isStarted()) {
             return res.status(400).json({ error: 'Cannot unregister after event has started' });

@@ -1,28 +1,31 @@
 import { Router } from 'express';
 import { Database } from '../storage/Database';
 import { Event } from '../models/Event';
+import { authenticate, AuthenticatedRequest } from '../middleware/auth';
 
 const router = Router();
 const db = Database.getInstance();
 
+router.use(authenticate);
+
 // POST /players - Create a global player
-router.post('/', async (req, res) => {
+router.post('/', async (req: AuthenticatedRequest, res) => {
   try {
     const { name } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Missing required field: name' });
     }
-    const player = await db.createPlayer(name);
+    const player = await db.createPlayer(name, req.user!.id);
     res.status(201).json(player);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// GET /players - List all players
-router.get('/', (req, res) => {
+// GET /players - List my players
+router.get('/', (req: AuthenticatedRequest, res) => {
   try {
-    const players = db.getAllPlayers();
+    const players = db.getPlayersByOwner(req.user!.id);
     res.json(players);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -30,11 +33,14 @@ router.get('/', (req, res) => {
 });
 
 // GET /players/:playerId - Retrieve player details
-router.get('/:playerId', (req, res) => {
+router.get('/:playerId', async (req: AuthenticatedRequest, res) => {
   try {
-    const player = db.getPlayer(req.params.playerId);
+    const player = db.getPlayer(req.params.playerId as string);
     if (!player) {
       return res.status(404).json({ error: 'Player not found' });
+    }
+    if ((player as any).ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(player);
   } catch (err) {
@@ -43,11 +49,14 @@ router.get('/:playerId', (req, res) => {
 });
 
 // POST /events/:eventId/players - Register a player for an event
-router.post('/:eventId/players', async (req, res) => {
+router.post('/:eventId/players', async (req: AuthenticatedRequest, res) => {
   try {
-    const event = db.getEvent(req.params.eventId);
+    const event = db.getEvent(req.params.eventId as string);
     if (!event) {
       return res.status(404).json({ error: 'Event not found' });
+    }
+    if ((event as any).ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
     const { player_id, name } = req.body;
 
@@ -57,12 +66,15 @@ router.post('/:eventId/players', async (req, res) => {
       if (!player) {
         return res.status(404).json({ error: 'Player not found' });
       }
+      if ((player as any).ownerId !== req.user!.id) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     } else if (name) {
       const existing = db.findPlayerByName(name);
       if (existing) {
         player = existing;
       } else {
-        player = await db.createPlayer(name);
+        player = await db.createPlayer(name, req.user!.id);
       }
     } else {
       return res.status(400).json({ error: 'Either player_id or name must be provided' });
@@ -82,11 +94,14 @@ router.post('/:eventId/players', async (req, res) => {
 });
 
 // PATCH /events/:eventId/players/:playerId - Update player status for the event
-router.patch('/:eventId/players/:playerId', async (req, res) => {
+router.patch('/:eventId/players/:playerId', async (req: AuthenticatedRequest, res) => {
   try {
-    const event = db.getEvent(req.params.eventId);
+    const event = db.getEvent(req.params.eventId as string);
     if (!event) {
       return res.status(404).json({ error: 'Event not found' });
+    }
+    if ((event as any).ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
     const { status } = req.body;
     if (!status) {
@@ -97,7 +112,7 @@ router.patch('/:eventId/players/:playerId', async (req, res) => {
       return res.status(400).json({ error: 'Invalid status. Must be WAITING, PLAYING, UNAVAILABLE, AWAY, or RETIRED' });
     }
 
-    const updated = event.updateRegistration(req.params.playerId, { status });
+    const updated = event.updateRegistration(req.params.playerId as string, { status });
     if (!updated) {
       return res.status(404).json({ error: 'Player registration not found for this event' });
     }
@@ -114,13 +129,16 @@ router.patch('/:eventId/players/:playerId', async (req, res) => {
 });
 
 // DELETE /players/:playerId - Delete a global player
-router.delete('/:playerId', async (req, res) => {
+router.delete('/:playerId', async (req: AuthenticatedRequest, res) => {
   try {
-    const player = db.getPlayer(req.params.playerId);
+    const player = db.getPlayer(req.params.playerId as string);
     if (!player) {
       return res.status(404).json({ error: 'Player not found' });
     }
-    await db.deletePlayer(req.params.playerId);
+    if ((player as any).ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    await db.deletePlayer(req.params.playerId as string);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

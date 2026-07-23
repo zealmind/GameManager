@@ -1,6 +1,8 @@
 import { Database } from '../storage/Database';
 import { SchedulingService } from '../services/SchedulingService';
 
+const DEFAULT_OWNER = 'test-owner-0000-0000-0000-000000000000';
+
 describe('Pickleball Event Scheduler Validation', () => {
   let db: Database;
   let scheduler: SchedulingService;
@@ -12,10 +14,10 @@ describe('Pickleball Event Scheduler Validation', () => {
   });
 
   it('should not schedule with fewer than 4 players', async () => {
-    const event = await db.createEvent('Test Event', 18, 3);
+    const event = await db.createEvent('Test Event', 18, 3, DEFAULT_OWNER);
     
     for (let i = 1; i <= 3; i++) {
-      const player = await db.createPlayer(`Player ${i}`);
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
       event.addPlayer(player);
     }
     
@@ -27,11 +29,11 @@ describe('Pickleball Event Scheduler Validation', () => {
   });
 
   it('should detect deadlock when all available players have played with each other', async () => {
-    const event = await db.createEvent('Test Event', 10, 2);
+    const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
     
     const players = [];
     for (let i = 1; i <= 4; i++) {
-      const player = await db.createPlayer(`Player ${i}`);
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
       event.addPlayer(player);
       players.push(player);
     }
@@ -51,11 +53,11 @@ describe('Pickleball Event Scheduler Validation', () => {
   });
 
   it('should schedule games with 12 players, aiming for minimum 6 games each (some may get 7)', async () => {
-    const event = await db.createEvent('Test Event', 18, 3);
+    const event = await db.createEvent('Test Event', 18, 3, DEFAULT_OWNER);
     
     const playerIds: string[] = [];
     for (let i = 1; i <= 12; i++) {
-      const player = await db.createPlayer(`Player ${i}`);
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
       event.addPlayer(player);
       playerIds.push(player.id);
     }
@@ -93,11 +95,11 @@ describe('Pickleball Event Scheduler Validation', () => {
   });
 
   it('should continue scheduling after player becomes unavailable', async () => {
-    const event = await db.createEvent('Test Event', 18, 3);
+    const event = await db.createEvent('Test Event', 18, 3, DEFAULT_OWNER);
     
     const playerIds: string[] = [];
     for (let i = 1; i <= 12; i++) {
-      const player = await db.createPlayer(`Player ${i}`);
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
       event.addPlayer(player);
       playerIds.push(player.id);
     }
@@ -138,3 +140,4 @@ describe('Pickleball Event Scheduler Validation', () => {
     expect(event.gameHistory.length).toBe(gamesScheduled);
   });
 });
+

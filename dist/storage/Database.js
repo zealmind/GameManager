@@ -1,9 +1,13 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Database = void 0;
 const client_1 = require("@libsql/client");
 const Player_1 = require("../models/Player");
 const Event_1 = require("../models/Event");
+const node_crypto_1 = __importDefault(require("node:crypto"));
 class Database {
     static instance;
     players;
@@ -17,7 +21,7 @@ class Database {
         this.events = new Map();
         this.eventRegistrations = new Map();
         this.client = (0, client_1.createClient)({
-            url: process.env.TURSO_DATABASE_URL || 'libsql://test',
+            url: process.env.TURSO_DATABASE_URL || 'file:local.db',
             authToken: process.env.TURSO_AUTH_TOKEN,
         });
     }
@@ -34,17 +38,29 @@ class Database {
     }
     async init() {
         await this.client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        password_hash TEXT,
+        provider TEXT NOT NULL DEFAULT 'local',
+        provider_id TEXT,
+        avatar_url TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        nickName TEXT
+        nickName TEXT,
+        owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         courts INTEGER NOT NULL,
         totalGamesToPlay INTEGER NOT NULL,
-        startedAt TEXT
+        startedAt TEXT,
+        owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS registrations (
         eventId TEXT NOT NULL,
@@ -72,17 +88,33 @@ class Database {
         data TEXT NOT NULL
       );
     `);
+        await this.migrateAddOwnerId();
         await this.load();
     }
+    async migrateAddOwnerId() {
+        try {
+            await this.client.execute("ALTER TABLE events ADD COLUMN owner_id TEXT");
+        }
+        catch {
+            // column already exists
+        }
+        try {
+            await this.client.execute("ALTER TABLE players ADD COLUMN owner_id TEXT");
+        }
+        catch {
+            // column already exists
+        }
+    }
     async persist() {
-        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName }));
+        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId }));
         const eventsData = Array.from(this.events.values()).map(e => ({
             id: e.id,
             name: e.name,
             courts: e.courts,
             totalGamesToPlay: e.totalGamesToPlay,
             startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
-            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName })),
+            ownerId: e.ownerId || '',
+            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId })),
             registrations: Array.from(e.registrations.values()),
             games: e.games.map(g => ({
                 ...g,
@@ -113,15 +145,19 @@ class Database {
                 return;
             for (const p of data.players) {
                 const nick = p.nickName || this.assignNickName();
-                this.players.set(p.id, new Player_1.Player(p.name, p.id, nick));
+                const player = new Player_1.Player(p.name, p.id, nick);
+                player.ownerId = p.ownerId;
+                this.players.set(p.id, player);
             }
             for (const e of data.events) {
                 const event = new Event_1.Event(e.name, e.totalGamesToPlay, e.courts);
                 event.id = e.id;
                 event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
+                event.ownerId = e.ownerId;
                 for (const p of e.players) {
                     const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id, p.nickName || this.assignNickName());
                     if (!this.players.has(player.id)) {
+                        player.ownerId = p.ownerId;
                         this.players.set(player.id, player);
                     }
                     event.players.set(player.id, player);
@@ -151,6 +187,36 @@ class Database {
             console.error('Failed to load database', err);
         }
     }
+    // User operations
+    async createUser(email, name, provider, providerId, avatarUrl) {
+        const id = node_crypto_1.default.randomUUID();
+        await this.client.execute('INSERT INTO users (id, email, name, provider, provider_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)', [id, email, name, provider, providerId || null, avatarUrl || null]);
+        return { id };
+    }
+    async getUserByEmail(email) {
+        const result = await this.client.execute('SELECT id, email, name, provider, password_hash FROM users WHERE email = ?', [email]);
+        if (result.rows.length === 0)
+            return undefined;
+        const row = result.rows[0];
+        return { id: row.id, email: row.email, name: row.name, provider: row.provider, password_hash: row.password_hash };
+    }
+    async getUserByProvider(provider, providerId) {
+        const result = await this.client.execute('SELECT id, email, name, provider FROM users WHERE provider = ? AND provider_id = ?', [provider, providerId]);
+        if (result.rows.length === 0)
+            return undefined;
+        const row = result.rows[0];
+        return { id: row.id, email: row.email, name: row.name, provider: row.provider };
+    }
+    async getUserById(id) {
+        const result = await this.client.execute('SELECT id, email, name, provider, avatar_url FROM users WHERE id = ?', [id]);
+        if (result.rows.length === 0)
+            return undefined;
+        const row = result.rows[0];
+        return { id: row.id, email: row.email, name: row.name, provider: row.provider, avatar_url: row.avatar_url };
+    }
+    async updateUserPassword(userId, passwordHash) {
+        await this.client.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId]);
+    }
     // Player operations
     getPlayer(playerId) {
         return this.players.get(playerId);
@@ -158,9 +224,13 @@ class Database {
     getAllPlayers() {
         return Array.from(this.players.values());
     }
-    async createPlayer(name) {
+    getPlayersByOwner(ownerId) {
+        return Array.from(this.players.values()).filter((p) => p.ownerId === ownerId);
+    }
+    async createPlayer(name, ownerId) {
         const nick = this.assignNickName();
         const player = new Player_1.Player(name, undefined, nick);
+        player.ownerId = ownerId;
         this.players.set(player.id, player);
         await this.persist();
         return player;
@@ -175,8 +245,12 @@ class Database {
     getAllEvents() {
         return Array.from(this.events.values());
     }
-    async createEvent(name, totalGamesToPlay, numCourts) {
+    getEventsByOwner(ownerId) {
+        return Array.from(this.events.values()).filter((e) => e.ownerId === ownerId);
+    }
+    async createEvent(name, totalGamesToPlay, numCourts, ownerId) {
         const event = new Event_1.Event(name, totalGamesToPlay, numCourts);
+        event.ownerId = ownerId;
         this.events.set(event.id, event);
         await this.persist();
         return event;
@@ -238,7 +312,6 @@ class Database {
         }
         await this.persist();
     }
-    // Clear all data (useful for testing)
     async clear() {
         this.players.clear();
         this.events.clear();

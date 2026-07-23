@@ -3,11 +3,13 @@ import { Player } from '../models/Player';
 import { Event } from '../models/Event';
 import type { EventPlayerRegistration, PlayerStatus } from '../models/EventPlayerRegistration';
 import type { Game } from '../models/Game';
+import crypto from 'node:crypto';
 
 interface SerializedPlayer {
   id: string;
   name: string;
   nickName: string;
+  ownerId?: string;
 }
 
 interface SerializedGame {
@@ -32,6 +34,7 @@ interface SerializedEvent {
   courts: number;
   totalGamesToPlay: number;
   startedAt?: string;
+  ownerId: string;
   players: SerializedPlayer[];
   registrations: EventPlayerRegistration[];
   games: SerializedGame[];
@@ -43,7 +46,7 @@ export class Database {
   private players: Map<string, Player>;
   private events: Map<string, Event>;
   private eventRegistrations: Map<string, EventPlayerRegistration>;
-  private client: ReturnType<typeof createClient>;
+  public client: ReturnType<typeof createClient>;
   private nextNickNameIndex = 0;
   private readonly nickLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -53,7 +56,7 @@ export class Database {
     this.eventRegistrations = new Map<string, EventPlayerRegistration>();
     
     this.client = createClient({
-      url: process.env.TURSO_DATABASE_URL || 'libsql://test',
+      url: process.env.TURSO_DATABASE_URL || 'file:local.db',
       authToken: process.env.TURSO_AUTH_TOKEN,
     });
   }
@@ -73,17 +76,29 @@ export class Database {
 
   async init(): Promise<void> {
     await this.client.executeMultiple(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT NOT NULL UNIQUE,
+        name TEXT NOT NULL,
+        password_hash TEXT,
+        provider TEXT NOT NULL DEFAULT 'local',
+        provider_id TEXT,
+        avatar_url TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        nickName TEXT
+        nickName TEXT,
+        owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         courts INTEGER NOT NULL,
         totalGamesToPlay INTEGER NOT NULL,
-        startedAt TEXT
+        startedAt TEXT,
+        owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS registrations (
         eventId TEXT NOT NULL,
@@ -111,18 +126,34 @@ export class Database {
         data TEXT NOT NULL
       );
     `);
+
+    await this.migrateAddOwnerId();
     await this.load();
   }
 
+  private async migrateAddOwnerId(): Promise<void> {
+    try {
+      await this.client.execute("ALTER TABLE events ADD COLUMN owner_id TEXT");
+    } catch {
+      // column already exists
+    }
+    try {
+      await this.client.execute("ALTER TABLE players ADD COLUMN owner_id TEXT");
+    } catch {
+      // column already exists
+    }
+  }
+
   public async persist(): Promise<void> {
-    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName }));
+    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId }));
     const eventsData = Array.from(this.events.values()).map<SerializedEvent>(e => ({
       id: e.id,
       name: e.name,
       courts: e.courts,
       totalGamesToPlay: e.totalGamesToPlay,
       startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
-      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName })),
+      ownerId: (e as any).ownerId || '',
+      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId })),
       registrations: Array.from(e.registrations.values()),
       games: e.games.map<SerializedGame>(g => ({
         ...g,
@@ -164,17 +195,21 @@ export class Database {
 
       for (const p of data.players) {
         const nick = p.nickName || this.assignNickName();
-        this.players.set(p.id, new Player(p.name, p.id, nick));
+        const player = new Player(p.name, p.id, nick);
+        (player as any).ownerId = p.ownerId;
+        this.players.set(p.id, player);
       }
 
       for (const e of data.events) {
         const event = new Event(e.name, e.totalGamesToPlay, e.courts);
         event.id = e.id;
         event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
+        (event as any).ownerId = e.ownerId;
 
         for (const p of e.players) {
           const player = this.players.get(p.id) || new Player(p.name, p.id, p.nickName || this.assignNickName());
           if (!this.players.has(player.id)) {
+            (player as any).ownerId = p.ownerId;
             this.players.set(player.id, player);
           }
           event.players.set(player.id, player);
@@ -209,6 +244,41 @@ export class Database {
     }
   }
 
+  // User operations
+  async createUser(email: string, name: string, provider: string, providerId?: string, avatarUrl?: string): Promise<{ id: string }> {
+    const id = crypto.randomUUID();
+    await this.client.execute(
+      'INSERT INTO users (id, email, name, provider, provider_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, email, name, provider, providerId || null, avatarUrl || null]
+    );
+    return { id };
+  }
+
+  async getUserByEmail(email: string): Promise<{ id: string; email: string; name: string; provider: string; password_hash?: string } | undefined> {
+    const result = await this.client.execute('SELECT id, email, name, provider, password_hash FROM users WHERE email = ?', [email]);
+    if (result.rows.length === 0) return undefined;
+    const row = result.rows[0] as any;
+    return { id: row.id, email: row.email, name: row.name, provider: row.provider, password_hash: row.password_hash };
+  }
+
+  async getUserByProvider(provider: string, providerId: string): Promise<{ id: string; email: string; name: string; provider: string } | undefined> {
+    const result = await this.client.execute('SELECT id, email, name, provider FROM users WHERE provider = ? AND provider_id = ?', [provider, providerId]);
+    if (result.rows.length === 0) return undefined;
+    const row = result.rows[0] as any;
+    return { id: row.id, email: row.email, name: row.name, provider: row.provider };
+  }
+
+  async getUserById(id: string): Promise<{ id: string; email: string; name: string; provider: string; avatar_url?: string } | undefined> {
+    const result = await this.client.execute('SELECT id, email, name, provider, avatar_url FROM users WHERE id = ?', [id]);
+    if (result.rows.length === 0) return undefined;
+    const row = result.rows[0] as any;
+    return { id: row.id, email: row.email, name: row.name, provider: row.provider, avatar_url: row.avatar_url };
+  }
+
+  async updateUserPassword(userId: string, passwordHash: string): Promise<void> {
+    await this.client.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, userId]);
+  }
+
   // Player operations
   getPlayer(playerId: string): Player | undefined {
     return this.players.get(playerId);
@@ -218,9 +288,14 @@ export class Database {
     return Array.from(this.players.values());
   }
 
-  async createPlayer(name: string): Promise<Player> {
+  getPlayersByOwner(ownerId: string): Player[] {
+    return Array.from(this.players.values()).filter((p: any) => p.ownerId === ownerId);
+  }
+
+  async createPlayer(name: string, ownerId: string): Promise<Player> {
     const nick = this.assignNickName();
     const player = new Player(name, undefined, nick);
+    (player as any).ownerId = ownerId;
     this.players.set(player.id, player);
     await this.persist();
     return player;
@@ -239,8 +314,13 @@ export class Database {
     return Array.from(this.events.values());
   }
 
-  async createEvent(name: string, totalGamesToPlay: number, numCourts: number): Promise<Event> {
+  getEventsByOwner(ownerId: string): Event[] {
+    return Array.from(this.events.values()).filter((e: any) => e.ownerId === ownerId);
+  }
+
+  async createEvent(name: string, totalGamesToPlay: number, numCourts: number, ownerId: string): Promise<Event> {
     const event = new Event(name, totalGamesToPlay, numCourts);
+    (event as any).ownerId = ownerId;
     this.events.set(event.id, event);
     await this.persist();
     return event;
@@ -310,7 +390,6 @@ export class Database {
     await this.persist();
   }
 
-  // Clear all data (useful for testing)
   async clear(): Promise<void> {
     this.players.clear();
     this.events.clear();
