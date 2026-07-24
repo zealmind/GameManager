@@ -36,6 +36,28 @@ function showToast(msg) {
     setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
+function buildNickNameMap(players) {
+    if (!players || !players.length) return new Map();
+    const shuffled = [...players];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    const map = new Map();
+    shuffled.forEach((p, i) => map.set(p.id, String.fromCharCode(65 + i)));
+    return map;
+}
+
+function getPlayerNickName(playerId, nickNameMap) {
+    return nickNameMap.get(playerId) || '';
+}
+
+function getPlayerLabel(player, nickNameMap, showNickNames) {
+    if (!showNickNames) return player.name;
+    const nick = getPlayerNickName(player.id, nickNameMap);
+    return nick ? `(${nick}) ` + player.name : player.name;
+}
+
 async function api(url, options = {}) {
     const token = getToken();
     const controller = new AbortController();
@@ -53,10 +75,6 @@ async function api(url, options = {}) {
         clearTimeout(timeoutId);
         if (!res.ok) {
             const err = await res.json().catch(() => ({ error: 'Request failed' }));
-            if (res.status === 401) {
-                clearUser();
-                showLoginModal();
-            }
             throw new Error(err.error || `HTTP ${res.status}`);
         }
         return res.json();
@@ -102,11 +120,12 @@ function initWelcomeScreen() {
 
     btn.onclick = () => {
         console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn() });
-        screen.classList.remove('active');
-        video.pause();
-        if (isLoggedIn()) {
+        if (btn.textContent === 'Enter Site') {
+            screen.classList.remove('active');
+            video.pause();
             switchView('dashboard');
         } else {
+            btn.classList.add('hidden');
             showLoginModal();
         }
     };
@@ -228,12 +247,6 @@ async function showLoginModal() {
         return;
     }
 
-    try {
-        await api(`${API_BASE}/auth/me`, { method: 'GET', timeoutMs: 4000 });
-    } catch {
-        // not logged in — modal is ready for login/signup
-    }
-
     loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         authError.classList.add('hidden');
@@ -289,6 +302,10 @@ async function showLoginModal() {
 function closeLoginModal() {
     const modal = document.getElementById('login-modal');
     if (modal) modal.remove();
+    if (!isLoggedIn()) {
+        const btn = document.getElementById('enter-btn');
+        if (btn) btn.classList.remove('hidden');
+    }
 }
 
 function switchAuthTab(tab) {
@@ -378,7 +395,7 @@ async function loadEventsList() {
                     <div class="list-item-title">${escapeHtml(e.name)}</div>
                     <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
-                <button class="btn btn-danger btn-sm delete-event-btn" data-event-id="${e.id}">Delete</button>
+                <span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>
             </div>
         `).join('');
         container.querySelectorAll('.list-item').forEach(item => {
@@ -548,7 +565,7 @@ function renderRegistrationPhase(event, status) {
                 ${status.players.length ? status.players.map(p => `
                     <div class="player-row">
                         <div class="player-info">
-                            <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
+                            <div class="player-name">${escapeHtml(p.name)}</div>
                         </div>
                         <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${p.id}">Unregister</button>
                     </div>
@@ -629,6 +646,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
 
     const renderPlayerGroup = (title, players, showActions) => {
         if (!players.length) return '';
+        const nickNameMap = buildNickNameMap(status.players);
         return `
             <div class="player-group">
                 <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
@@ -636,7 +654,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     ${players.map(p => `
                         <div class="player-row">
                             <div class="player-info">
-                                <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
+                                <div class="player-name">${escapeHtml(getPlayerLabel(p, nickNameMap, true))}</div>
                             </div>
                             ${showActions ? getPlayerActionButtons(p) : ''}
                         </div>
@@ -682,7 +700,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                 <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Completed Games &#9662;</div>
                 <select id="completed-games-player-filter" class="player-filter-select">
                     <option value="">All Players</option>
-                    ${status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</option>`).join('')}
+                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${escapeHtml(getPlayerLabel(p, nickNameMap))}</option>`).join(''); })()}
                 </select>
             </div>
             <div id="completed-games-list">
@@ -791,7 +809,7 @@ function renderLeaderboard(status, completedGames) {
         }
     }
 
-    const sorted = [...status.players].sort((a, b) => {
+    const sorted = [...status.players].filter(p => p.gamesPlayed > 0).sort((a, b) => {
         const wa = stats[a.id]?.wins || 0;
         const wb = stats[b.id]?.wins || 0;
         if (wb !== wa) return wb - wa;
@@ -799,18 +817,25 @@ function renderLeaderboard(status, completedGames) {
         const db = stats[b.id]?.scoreDiff || 0;
         return db - da;
     });
+    if (!sorted.length) {
+        return '<div class="text-muted">No players have played any games yet</div>';
+    }
+
+    const nickNameMap = buildNickNameMap(status.players);
 
     return `
         <div class="leaderboard">
             ${sorted.map((p, idx) => {
                 const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
                 const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
-                const partnersStr = (p.partners || []).map(nick => escapeHtml(nick)).join(', ') || 'None';
+                const nick = getPlayerNickName(p.id, nickNameMap);
+                const playerLabel = nick ? `${escapeHtml(p.name)} (${nick})` : escapeHtml(p.name);
+                const partnersStr = (p.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None';
                 return `
                 <div class="leaderboard-row">
                     <div class="leaderboard-rank">${idx + 1}</div>
                     <div class="leaderboard-player">
-                        <div class="player-name">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
+                        <div class="player-name">${playerLabel}</div>
                         <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${partnersStr}</div>
                     </div>
                     <div class="leaderboard-stat">${s.wins} <span class="text-muted">wins</span></div>
@@ -1063,7 +1088,7 @@ function openAddPlayersModal(eventId, selectedIds) {
     overlay.innerHTML = `
         <div class="modal">
             <div class="modal-header">
-                <div class="modal-title">Add Players</div>
+                <div class="modal-title">Add Players ${selectedIds.size > 0 ? `(${selectedIds.size} added)` : ''}</div>
                 <button class="modal-close">&times;</button>
             </div>
             <div class="form-group">
@@ -1095,7 +1120,7 @@ function openAddPlayersModal(eventId, selectedIds) {
         container.innerHTML = allPlayers.map(p => `
             <label class="player-checkbox-row">
                 <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}>
-                <span>${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</span>
+                <span>${escapeHtml(p.name)}</span>
             </label>
         `).join('');
         container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -1173,10 +1198,10 @@ async function loadPlayersList() {
         container.innerHTML = players.map(p => `
             <div class="list-item" data-player-id="${p.id}">
                 <div style="flex:1">
-                    <div class="list-item-title">${escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name)}</div>
+                    <div class="list-item-title">${escapeHtml(p.name)}</div>
                     <div class="list-item-meta">ID: ${p.id.slice(0,8)}...</div>
                 </div>
-                <button class="btn btn-danger btn-sm delete-player-btn" data-player-id="${p.id}">Delete</button>
+                <span class="delete-link delete-player-btn" data-player-id="${p.id}">Delete</span>
             </div>
         `).join('');
         container.querySelectorAll('.list-item').forEach(item => {
@@ -1233,10 +1258,18 @@ function openCreatePlayerModal() {
     document.getElementById('create-player-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
+        const name = String(fd.get('name') || '').trim();
+        if (!name) return;
         try {
+            const existing = await api(`${API_BASE}/players`);
+            const duplicate = existing.find(p => p.name.toLowerCase() === name.toLowerCase());
+            if (duplicate) {
+                showToast(`Player "${name}" already exists. Use a different name.`);
+                return;
+            }
             await api(`${API_BASE}/players`, {
                 method: 'POST',
-                body: JSON.stringify({ name: fd.get('name') })
+                body: JSON.stringify({ name })
             });
             overlay.remove();
             loadPlayersList();
@@ -1308,6 +1341,7 @@ function openManualAllotModal(eventId, courtId) {
 
     api(`${API_BASE}/events/${eventId}/status`).then(status => {
         const waiting = status.players.filter(p => p.status === 'WAITING');
+        const nickNameMap = buildNickNameMap(status.players);
         const selects = overlay.querySelectorAll('.manual-allot-select');
 
         function renderOptions(team, slot, excludeIds) {
@@ -1320,7 +1354,7 @@ function openManualAllotModal(eventId, courtId) {
             let options = available.map(p => {
                 const partnerIds = p.partnerIds || [];
                 const hasPartnered = partnerId && partnerIds.includes(partnerId);
-                const label = escapeHtml((p.nickName ? p.nickName + '. ' : '') + p.name);
+                const label = getPlayerLabel(p, nickNameMap);
                 return { id: p.id, label, hasPartnered };
             });
 

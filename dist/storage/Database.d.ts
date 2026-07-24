@@ -9,11 +9,8 @@ export declare class Database {
     private events;
     private eventRegistrations;
     client: ReturnType<typeof createClient>;
-    private nextNickNameIndex;
-    private readonly nickLetters;
     private constructor();
     static getInstance(): Database;
-    private assignNickName;
     init(): Promise<void>;
     private migrateAddOwnerId;
     persist(): Promise<void>;

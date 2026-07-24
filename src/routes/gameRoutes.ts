@@ -318,12 +318,11 @@ router.get('/:eventId/status', async (req: AuthenticatedRequest, res) => {
         const partnerIds = reg?.partners || [];
         const partnerNames = partnerIds.map(pid => {
           const partner = event.players.get(pid);
-          return partner ? partner.nickName || partner.name : pid.slice(0, 8);
+          return partner ? partner.name : pid.slice(0, 8);
         });
         return {
           id: p.id,
           name: p.name,
-          nickName: p.nickName,
           gamesPlayed: reg?.gamesPlayedCount || 0,
           status: reg?.status || 'UNKNOWN',
           partners: partnerNames,

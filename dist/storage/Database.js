@@ -14,18 +14,16 @@ class Database {
     events;
     eventRegistrations;
     client;
-    nextNickNameIndex = 0;
-    nickLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     constructor() {
         this.players = new Map();
         this.events = new Map();
         this.eventRegistrations = new Map();
         const dbUrl = process.env.TURSO_DATABASE_URL;
-        if (!dbUrl) {
+        if (!dbUrl && process.env.NODE_ENV !== 'test') {
             throw new Error('TURSO_DATABASE_URL is required');
         }
         this.client = (0, client_1.createClient)({
-            url: dbUrl,
+            url: dbUrl || 'libsql://test',
             authToken: process.env.TURSO_AUTH_TOKEN,
         });
     }
@@ -34,11 +32,6 @@ class Database {
             Database.instance = new Database();
         }
         return Database.instance;
-    }
-    assignNickName() {
-        const letter = this.nickLetters[this.nextNickNameIndex % this.nickLetters.length];
-        this.nextNickNameIndex++;
-        return String(letter);
     }
     async init() {
         await this.client.executeMultiple(`
@@ -55,7 +48,6 @@ class Database {
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        nickName TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -110,7 +102,7 @@ class Database {
         }
     }
     async persist() {
-        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId }));
+        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, ownerId: p.ownerId }));
         const eventsData = Array.from(this.events.values()).map(e => ({
             id: e.id,
             name: e.name,
@@ -118,7 +110,7 @@ class Database {
             totalGamesToPlay: e.totalGamesToPlay,
             startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
             ownerId: e.ownerId || '',
-            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId })),
+            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, ownerId: p.ownerId })),
             registrations: Array.from(e.registrations.values()),
             games: e.games.map(g => ({
                 ...g,
@@ -148,8 +140,15 @@ class Database {
             if (!data)
                 return;
             for (const p of data.players) {
-                const nick = p.nickName || this.assignNickName();
-                const player = new Player_1.Player(p.name, p.id, nick);
+                delete p.nickName;
+            }
+            for (const e of data.events) {
+                for (const p of (e.players || [])) {
+                    delete p.nickName;
+                }
+            }
+            for (const p of data.players) {
+                const player = new Player_1.Player(p.name, p.id);
                 player.ownerId = p.ownerId;
                 this.players.set(p.id, player);
             }
@@ -159,14 +158,14 @@ class Database {
                 event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
                 event.ownerId = e.ownerId;
                 for (const p of e.players) {
-                    const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id, p.nickName || this.assignNickName());
+                    const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id);
                     if (!this.players.has(player.id)) {
                         player.ownerId = p.ownerId;
                         this.players.set(player.id, player);
                     }
                     event.players.set(player.id, player);
                 }
-                for (const r of e.registrations) {
+                for (const r of (e.registrations || [])) {
                     event.registrations.set(r.playerId, r);
                 }
                 event.games = e.games.map(g => ({
@@ -232,8 +231,13 @@ class Database {
         return Array.from(this.players.values()).filter((p) => p.ownerId === ownerId);
     }
     async createPlayer(name, ownerId) {
-        const nick = this.assignNickName();
-        const player = new Player_1.Player(name, undefined, nick);
+        const existing = this.players.values();
+        for (const p of existing) {
+            if (p.name === name && p.ownerId === ownerId) {
+                throw new Error(`Player "${name}" already exists`);
+            }
+        }
+        const player = new Player_1.Player(name);
         player.ownerId = ownerId;
         this.players.set(player.id, player);
         await this.persist();
@@ -320,7 +324,6 @@ class Database {
         this.players.clear();
         this.events.clear();
         this.eventRegistrations.clear();
-        this.nextNickNameIndex = 0;
         await this.client.execute('DELETE FROM app_state WHERE id = ?', [1]);
     }
 }

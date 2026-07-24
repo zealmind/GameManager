@@ -158,6 +158,10 @@ html, body {
     box-shadow: var(--shadow);
     cursor: pointer;
     transition: transform 0.15s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
 }
 
 .list-item:active {
@@ -284,7 +288,7 @@ html, body {
     display: flex;
     align-items: flex-end;
     justify-content: center;
-    z-index: 200;
+    z-index: 1001;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.25s;
@@ -751,9 +755,9 @@ html, body {
 
 .enter-btn {
     position: absolute;
-    bottom: 15%;
+    top: 55%;
     left: 50%;
-    transform: translateX(-50%);
+    transform: translate(-50%, -50%);
     z-index: 2;
     padding: 14px 32px;
     border: 2px solid rgba(255,255,255,0.9);
@@ -765,6 +769,11 @@ html, body {
     cursor: pointer;
     letter-spacing: 0.5px;
     transition: background 0.2s, transform 0.15s;
+}
+
+.enter-btn:active {
+    transform: translate(-50%, -50%) scale(0.96);
+    background: rgba(0,0,0,0.6);
 }
 
 .auth-debug {
@@ -975,4 +984,20 @@ html, body {
     color: #991b1b;
     font-size: 12px;
     font-weight: 500;
+}
+
+.delete-link {
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    flex-shrink: 0;
+    transition: color 0.15s, background 0.15s;
+    user-select: none;
+}
+
+.delete-link:hover {
+    color: var(--danger);
+    background: #fef2f2;
 }

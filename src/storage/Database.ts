@@ -8,7 +8,6 @@ import crypto from 'node:crypto';
 interface SerializedPlayer {
   id: string;
   name: string;
-  nickName: string;
   ownerId?: string;
 }
 
@@ -47,8 +46,6 @@ export class Database {
   private events: Map<string, Event>;
   private eventRegistrations: Map<string, EventPlayerRegistration>;
   public client: ReturnType<typeof createClient>;
-  private nextNickNameIndex = 0;
-  private readonly nickLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
   private constructor() {
     this.players = new Map<string, Player>();
@@ -56,11 +53,11 @@ export class Database {
     this.eventRegistrations = new Map<string, EventPlayerRegistration>();
     
     const dbUrl = process.env.TURSO_DATABASE_URL;
-    if (!dbUrl) {
+    if (!dbUrl && process.env.NODE_ENV !== 'test') {
       throw new Error('TURSO_DATABASE_URL is required');
     }
     this.client = createClient({
-      url: dbUrl,
+      url: dbUrl || 'libsql://test',
       authToken: process.env.TURSO_AUTH_TOKEN,
     });
   }
@@ -70,12 +67,6 @@ export class Database {
       Database.instance = new Database();
     }
     return Database.instance;
-  }
-
-  private assignNickName(): string {
-    const letter = this.nickLetters[this.nextNickNameIndex % this.nickLetters.length];
-    this.nextNickNameIndex++;
-    return String(letter);
   }
 
   async init(): Promise<void> {
@@ -93,7 +84,6 @@ export class Database {
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        nickName TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -149,7 +139,7 @@ export class Database {
   }
 
   public async persist(): Promise<void> {
-    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId }));
+    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, ownerId: (p as any).ownerId }));
     const eventsData = Array.from(this.events.values()).map<SerializedEvent>(e => ({
       id: e.id,
       name: e.name,
@@ -157,7 +147,7 @@ export class Database {
       totalGamesToPlay: e.totalGamesToPlay,
       startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
       ownerId: (e as any).ownerId || '',
-      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId })),
+      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, ownerId: (p as any).ownerId })),
       registrations: Array.from(e.registrations.values()),
       games: e.games.map<SerializedGame>(g => ({
         ...g,
@@ -198,8 +188,16 @@ export class Database {
       if (!data) return;
 
       for (const p of data.players) {
-        const nick = p.nickName || this.assignNickName();
-        const player = new Player(p.name, p.id, nick);
+        delete (p as any).nickName;
+      }
+      for (const e of data.events) {
+        for (const p of (e.players || [])) {
+          delete (p as any).nickName;
+        }
+      }
+
+      for (const p of data.players) {
+        const player = new Player(p.name, p.id);
         (player as any).ownerId = p.ownerId;
         this.players.set(p.id, player);
       }
@@ -211,7 +209,7 @@ export class Database {
         (event as any).ownerId = e.ownerId;
 
         for (const p of e.players) {
-          const player = this.players.get(p.id) || new Player(p.name, p.id, p.nickName || this.assignNickName());
+          const player = this.players.get(p.id) || new Player(p.name, p.id);
           if (!this.players.has(player.id)) {
             (player as any).ownerId = p.ownerId;
             this.players.set(player.id, player);
@@ -219,7 +217,7 @@ export class Database {
           event.players.set(player.id, player);
         }
 
-        for (const r of e.registrations) {
+        for (const r of (e.registrations || [])) {
           event.registrations.set(r.playerId, r);
         }
 
@@ -297,8 +295,13 @@ export class Database {
   }
 
   async createPlayer(name: string, ownerId: string): Promise<Player> {
-    const nick = this.assignNickName();
-    const player = new Player(name, undefined, nick);
+    const existing = this.players.values();
+    for (const p of existing) {
+      if (p.name === name && (p as any).ownerId === ownerId) {
+        throw new Error(`Player "${name}" already exists`);
+      }
+    }
+    const player = new Player(name);
     (player as any).ownerId = ownerId;
     this.players.set(player.id, player);
     await this.persist();
@@ -398,7 +401,6 @@ export class Database {
     this.players.clear();
     this.events.clear();
     this.eventRegistrations.clear();
-    this.nextNickNameIndex = 0;
     await this.client.execute('DELETE FROM app_state WHERE id = ?', [1]);
   }
 }

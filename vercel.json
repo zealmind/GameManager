@@ -5,6 +5,6 @@
   "outputDirectory": ".vercel/output/static",
   "installCommand": "npm install",
   "env": {
-    "API_BASE_URL": "https://gamemanager-backend.onrender.com"
+    "API_BASE_URL": "https://gamemanager-nrg2.onrender.com"
   }
 }

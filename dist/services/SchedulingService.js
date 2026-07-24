@@ -10,17 +10,24 @@ class SchedulingService {
     }
     getAvailablePlayers(event) {
         const allPlayers = Array.from(event.players.values());
-        return allPlayers.filter(p => {
+        return allPlayers
+            .filter(p => {
             const reg = event.getRegistration(p.id);
             return reg && reg.status === 'WAITING';
-        }).sort((a, b) => {
-            const regA = event.getRegistration(a.id);
-            const regB = event.getRegistration(b.id);
+        })
+            .map(p => {
+            const reg = event.getRegistration(p.id);
             const avg = event.getAverageGamesPlayed();
-            const deficitA = avg - regA.gamesPlayedCount;
-            const deficitB = avg - regB.gamesPlayedCount;
-            return deficitB - deficitA;
-        });
+            const deficit = avg - reg.gamesPlayedCount;
+            return { player: p, deficit };
+        })
+            .sort((a, b) => {
+            const diff = a.deficit - b.deficit;
+            if (Math.abs(diff) > 0.001)
+                return diff;
+            return Math.random() - 0.5;
+        })
+            .map(item => item.player);
     }
     hasPlayedTogether(player1Id, player2Id, event) {
         const reg1 = event.getRegistration(player1Id);

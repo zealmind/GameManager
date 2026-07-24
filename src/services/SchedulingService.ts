@@ -19,17 +19,23 @@ export class SchedulingService {
 
   getAvailablePlayers(event: Event) {
     const allPlayers = Array.from(event.players.values());
-    return allPlayers.filter(p => {
-      const reg = event.getRegistration(p.id);
-      return reg && reg.status === 'WAITING';
-    }).sort((a, b) => {
-      const regA = event.getRegistration(a.id)!;
-      const regB = event.getRegistration(b.id)!;
-      const avg = event.getAverageGamesPlayed();
-      const deficitA = avg - regA.gamesPlayedCount;
-      const deficitB = avg - regB.gamesPlayedCount;
-      return deficitB - deficitA;
-    });
+    return allPlayers
+      .filter(p => {
+        const reg = event.getRegistration(p.id);
+        return reg && reg.status === 'WAITING';
+      })
+      .map(p => {
+        const reg = event.getRegistration(p.id)!;
+        const avg = event.getAverageGamesPlayed();
+        const deficit = avg - reg.gamesPlayedCount;
+        return { player: p, deficit };
+      })
+      .sort((a, b) => {
+        const diff = a.deficit - b.deficit;
+        if (Math.abs(diff) > 0.001) return diff;
+        return Math.random() - 0.5;
+      })
+      .map(item => item.player);
   }
 
   hasPlayedTogether(player1Id: string, player2Id: string, event: Event): boolean {
