@@ -6,8 +6,8 @@ export interface Game {
   gameNumber: number;
   courtId: number;
   players: {
-    team1: [string, string]; // player IDs
-    team2: [string, string]; // player IDs
+    team1: string[]; // player IDs
+    team2: string[]; // player IDs
   };
   scores?: [number, number]; // team1 score, team2 score (undefined if not completed)
   createdAt: Date;
@@ -20,7 +20,8 @@ export interface Game {
 export function createGame(
   eventId: string,
   courtId: number,
-  players: [string, string, string, string]
+  team1: string[],
+  team2: string[]
 ): Game {
   return {
     id: randomUUID(),
@@ -28,8 +29,8 @@ export function createGame(
     gameNumber: 0,
     courtId,
     players: {
-      team1: [players[0], players[1]],
-      team2: [players[2], players[3]],
+      team1,
+      team2,
     },
     scores: undefined,
     createdAt: new Date(),

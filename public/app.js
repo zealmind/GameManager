@@ -553,6 +553,14 @@ async function loadEventDetail(eventId) {
         }
 
         container.innerHTML = phaseHtml;
+
+        if (status.isStarted && !status.isEnded) {
+            const endBtn = document.createElement('div');
+            endBtn.style.cssText = 'text-align:center; margin-top:20px; padding-bottom:20px;';
+            endBtn.innerHTML = '<button class="btn btn-danger" id="end-event-btn">End Event</button>';
+            container.appendChild(endBtn);
+        }
+
         bindEventDetailActions(eventId, event, status);
     } catch (err) {
         app.innerHTML = `<div class="empty-state"><p class="text-danger">Failed to load event</p><p class="text-muted">${escapeHtml(err.message)}</p></div>`;
@@ -660,12 +668,10 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                             <span class="score-vs">-</span>
                             <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
                         </div>
-                        <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
+                         <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
             </div>
         </div>
-
-        ${!status.isEnded && status.isStarted ? `<button class="btn btn-danger" id="end-event-btn">End Event</button>` : ''}
-    `;
+            `;
         }
         courtsHtml += `</div>`;
     });
@@ -1361,7 +1367,7 @@ function openManualAllotModal(eventId, courtId) {
                         <select class="manual-allot-select" data-team="1" data-slot="0"></select>
                     </div>
                     <div class="form-group">
-                        <label>Player 2 (Partner)</label>
+                        <label>Player 2 (optional)</label>
                         <select class="manual-allot-select partner-select" data-team="1" data-slot="1"></select>
                     </div>
                 </div>
@@ -1373,7 +1379,7 @@ function openManualAllotModal(eventId, courtId) {
                         <select class="manual-allot-select" data-team="2" data-slot="0"></select>
                     </div>
                     <div class="form-group">
-                        <label>Player 2 (Partner)</label>
+                        <label>Player 2 (optional)</label>
                         <select class="manual-allot-select partner-select" data-team="2" data-slot="1"></select>
                     </div>
                 </div>
@@ -1449,14 +1455,13 @@ function openManualAllotModal(eventId, courtId) {
         const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
         const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
 
-        const team1 = [team1Slots[0].value, team1Slots[1].value];
-        const team2 = [team2Slots[0].value, team2Slots[1].value];
+        const team1 = team1Slots.map(s => s.value).filter(Boolean);
+        const team2 = team2Slots.map(s => s.value).filter(Boolean);
 
         const errorEl = document.getElementById('manual-allot-error');
         const missing = [];
-        if (!team1[0] || !team1[1]) missing.push('Team 1 needs 2 players');
-        if (!team2[0] || !team2[1]) missing.push('Team 2 needs 2 players');
-        if (new Set([...team1, ...team2].filter(Boolean)).size !== 4) missing.push('All 4 players must be distinct');
+        if (team1.length + team2.length < 1) missing.push('Select at least 1 player');
+        if (new Set([...team1, ...team2]).size !== team1.length + team2.length) missing.push('All players must be distinct');
 
         if (missing.length) {
             errorEl.textContent = missing.join(', ');

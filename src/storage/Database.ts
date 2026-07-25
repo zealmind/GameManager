@@ -17,8 +17,8 @@ interface SerializedGame {
   gameNumber: number;
   courtId: number;
   players: {
-    team1: [string, string];
-    team2: [string, string];
+    team1: string[];
+    team2: string[];
   };
   scores?: [number, number];
   createdAt: string;

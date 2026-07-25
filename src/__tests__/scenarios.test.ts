@@ -13,17 +13,17 @@ describe('Pickleball Event Scheduler Validation', () => {
     scheduler = new SchedulingService();
   });
 
-  it('should not schedule with fewer than 4 players', async () => {
+  it('should not schedule with fewer than 3 players', async () => {
     const event = await db.createEvent('Test Event', 18, 3, DEFAULT_OWNER);
     
-    for (let i = 1; i <= 3; i++) {
-      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
-      event.addPlayer(player);
-    }
+    const player = await db.createPlayer('Player 1', DEFAULT_OWNER);
+    event.addPlayer(player);
     
     const result = scheduler.assignNextGame(event.id, 1);
     expect(result.success).toBe(false);
-    expect(result.reason).toContain('Event is already complete');
+    expect(result.shouldWait).toBe(true);
+    expect(result.blockingConstraints).toBeDefined();
+    expect(result.blockingConstraints?.length).toBeGreaterThan(0);
   });
 
   it('should detect deadlock when all available players have played with each other', async () => {
@@ -48,6 +48,23 @@ describe('Pickleball Event Scheduler Validation', () => {
     expect(result.shouldWait).toBe(true);
     expect(result.blockingConstraints).toBeDefined();
     expect(result.blockingConstraints?.length).toBeGreaterThan(0);
+  });
+
+  it('should form 1v2 game when 3 players are available and 2v2 pairing fails', async () => {
+    const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
+    
+    const players = [];
+    for (let i = 1; i <= 3; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+    
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.game).toBeDefined();
+    const game = result.game!;
+    expect(game.players.team1.length + game.players.team2.length).toBe(3);
   });
 
   it('should schedule games with 12 players, aiming for minimum 6 games each', async () => {

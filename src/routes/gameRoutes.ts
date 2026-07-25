@@ -118,14 +118,14 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req: AuthenticatedR
     }
 
     const { team1, team2 } = req.body || {};
-    if (!team1 || !Array.isArray(team1) || team1.length !== 2 ||
-        !team2 || !Array.isArray(team2) || team2.length !== 2) {
-      return res.status(400).json({ error: 'Must provide team1 and team2 arrays with 2 players each' });
+    if ((!team1 || !Array.isArray(team1) || team1.length < 1) &&
+        (!team2 || !Array.isArray(team2) || team2.length < 1)) {
+      return res.status(400).json({ error: 'Must provide at least 1 player in team1 or team2' });
     }
 
-    const allPlayerIds = [...team1, ...team2];
-    if (new Set(allPlayerIds).size !== 4) {
-      return res.status(400).json({ error: 'All 4 players must be distinct' });
+    const allPlayerIds = [...team1, ...team2].filter(Boolean);
+    if (new Set(allPlayerIds).size !== allPlayerIds.length) {
+      return res.status(400).json({ error: 'All players must be distinct' });
     }
 
     for (const pid of allPlayerIds) {
@@ -138,9 +138,26 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req: AuthenticatedR
       }
     }
 
-    const game = createGame(req.params.eventId as string, courtId, [team1[0], team1[1], team2[0], team2[1]]);
+    const team1Clean = team1.filter(Boolean);
+    const team2Clean = team2.filter(Boolean);
 
-    for (const pid of allPlayerIds) {
+    let game;
+    if (team1Clean.length + team2Clean.length < 4) {
+      const result = schedulingService.completePartialGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
+      if (!result.success || !result.game) {
+        return res.status(409).json({
+          error: result.reason,
+          blockingConstraints: result.blockingConstraints
+        });
+      }
+      game = result.game;
+    } else {
+      game = createGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
+      game.gameNumber = event.nextGameNumber++;
+    }
+
+    const allGamePlayers = [...game.players.team1, ...game.players.team2];
+    for (const pid of allGamePlayers) {
       event.updateRegistration(pid, { status: 'PLAYING' });
     }
 
