@@ -13,6 +13,12 @@ export declare class Event {
     nextGameNumber: number;
     startedAt?: Date;
     endedAt?: Date;
+    sharedAccess: Array<{
+        token: string;
+        permission: 'viewer' | 'moderator';
+        invitedBy: string;
+        createdAt: string;
+    }>;
     constructor(name: string, totalGamesToPlay: number, numCourts: number);
     isStarted(): boolean;
     isEnded(): boolean;

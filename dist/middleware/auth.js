@@ -7,6 +7,7 @@ exports.hashPassword = hashPassword;
 exports.verifyPassword = verifyPassword;
 exports.signJwt = signJwt;
 exports.authenticate = authenticate;
+exports.extractShareToken = extractShareToken;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const Database_1 = require("../storage/Database");
@@ -55,5 +56,12 @@ async function authenticate(req, res, next) {
     catch {
         return res.status(401).json({ error: 'Invalid token' });
     }
+}
+function extractShareToken(req) {
+    const token = req.headers['x-share-token'];
+    if (!token || typeof token !== 'string')
+        return null;
+    const db = Database_1.Database.getInstance();
+    return db.resolveShareToken(token);
 }
 //# sourceMappingURL=auth.js.map

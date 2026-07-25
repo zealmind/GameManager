@@ -40,6 +40,7 @@ interface SerializedEvent {
   registrations: EventPlayerRegistration[];
   games: SerializedGame[];
   gameHistory: SerializedGame[];
+  sharedAccess: Array<{ token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }>;
 }
 
 export class Database {
@@ -163,7 +164,8 @@ export class Database {
         createdAt: g.createdAt.toISOString(),
         startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
         completedAt: g.completedAt?.toISOString()
-      }))
+      })),
+      sharedAccess: (e as any).sharedAccess || []
     }));
     const registrationsData = Array.from(this.eventRegistrations.values());
 
@@ -211,6 +213,7 @@ export class Database {
         event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
         event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
         (event as any).ownerId = e.ownerId;
+        event.sharedAccess = e.sharedAccess || [];
 
         for (const p of e.players) {
           const player = this.players.get(p.id) || new Player(p.name, p.id);
@@ -335,9 +338,40 @@ export class Database {
   async createEvent(name: string, totalGamesToPlay: number, numCourts: number, ownerId: string): Promise<Event> {
     const event = new Event(name, totalGamesToPlay, numCourts);
     (event as any).ownerId = ownerId;
+    event.sharedAccess = [];
     this.events.set(event.id, event);
     await this.persist();
     return event;
+  }
+
+  async generateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{ token: string }> {
+    const event = this.events.get(eventId);
+    if (!event) throw new Error('Event not found');
+    const token = crypto.randomBytes(16).toString('hex');
+    const access = { token, permission, invitedBy, createdAt: new Date().toISOString() };
+    event.sharedAccess.push(access);
+    await this.persist();
+    return { token };
+  }
+
+  resolveShareToken(token: string): { eventId: string; permission: 'viewer' | 'moderator' } | null {
+    for (const event of this.events.values()) {
+      const access = event.sharedAccess.find(a => a.token === token);
+      if (access) {
+        return { eventId: event.id, permission: access.permission };
+      }
+    }
+    return null;
+  }
+
+  getEventsForUser(userId: string): Event[] {
+    return Array.from(this.events.values()).filter((e: any) => e.ownerId === userId);
+  }
+
+  getModeratedEvents(userId: string): Event[] {
+    return Array.from(this.events.values()).filter((e: any) =>
+      e.ownerId !== userId && e.sharedAccess && e.sharedAccess.length > 0
+    );
   }
 
   // Event Player Registration operations

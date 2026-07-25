@@ -14,6 +14,7 @@ class Event {
     nextGameNumber;
     startedAt;
     endedAt;
+    sharedAccess;
     constructor(name, totalGamesToPlay, numCourts) {
         this.id = (0, node_crypto_1.randomUUID)();
         this.name = name;
@@ -24,6 +25,7 @@ class Event {
         this.totalGamesToPlay = totalGamesToPlay;
         this.gameHistory = []; // completed games
         this.nextGameNumber = 1;
+        this.sharedAccess = [];
     }
     isStarted() {
         return !!this.startedAt;

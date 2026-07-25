@@ -4,23 +4,28 @@ const express_1 = require("express");
 const Database_1 = require("../storage/Database");
 const SchedulingService_1 = require("../services/SchedulingService");
 const Game_1 = require("../models/Game");
-const auth_1 = require("../middleware/auth");
+const eventAccess_1 = require("../middleware/eventAccess");
 const router = (0, express_1.Router)();
 const db = Database_1.Database.getInstance();
 const schedulingService = new SchedulingService_1.SchedulingService();
-router.use(auth_1.authenticate);
-// DELETE /events/:eventId/courts/:courtId/allot - Cancel active allotment on a court
-router.delete('/:eventId/courts/:courtId/allot', async (req, res) => {
+function isOwnerOrModerator(event, req) {
+    const user = req.user;
+    const shareAccess = req.shareAccess;
+    if (user && event.ownerId === user.id)
+        return true;
+    if (shareAccess && shareAccess.eventId === event.id && shareAccess.permission === 'moderator')
+        return true;
+    return false;
+}
+// DELETE /events/:eventId/courts/:courtId/allot
+router.delete('/:eventId/courts/:courtId/allot', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         const courtId = parseInt(req.params.courtId, 10);
-        const active = event.games.find(g => !g.completed && g.courtId === courtId);
+        const active = event.games.find((g) => !g.completed && g.courtId === courtId);
         if (!active) {
             return res.status(404).json({ error: 'No active allotment on this court' });
         }
@@ -32,7 +37,7 @@ router.delete('/:eventId/courts/:courtId/allot', async (req, res) => {
             if (reg)
                 reg.status = 'WAITING';
         }
-        event.games = event.games.filter(g => !(!g.completed && g.courtId === courtId));
+        event.games = event.games.filter((g) => !(!g.completed && g.courtId === courtId));
         await db.persist();
         res.json({ success: true });
     }
@@ -40,14 +45,11 @@ router.delete('/:eventId/courts/:courtId/allot', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/schedule - Trigger scheduling of the next game (auto court)
-router.post('/:eventId/schedule', async (req, res) => {
+// POST /events/:eventId/schedule
+router.post('/:eventId/schedule', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         const result = schedulingService.assignNextGame(req.params.eventId, 1);
@@ -71,14 +73,11 @@ router.post('/:eventId/schedule', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/end - End an event manually
-router.post('/:eventId/end', async (req, res) => {
+// POST /events/:eventId/end
+router.post('/:eventId/end', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         if (!event.isStarted()) {
@@ -95,21 +94,18 @@ router.post('/:eventId/end', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/courts/:courtId/allot-manual - Manual allotment with specific players
-router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
+// POST /events/:eventId/courts/:courtId/allot-manual
+router.post('/:eventId/courts/:courtId/allot-manual', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         if (!event.isStarted()) {
             return res.status(400).json({ error: 'Event has not started yet' });
         }
         const courtId = parseInt(req.params.courtId, 10);
-        const alreadyActive = event.games.find(g => !g.completed && g.courtId === courtId);
+        const alreadyActive = event.games.find((g) => !g.completed && g.courtId === courtId);
         if (alreadyActive) {
             return res.status(400).json({ error: `Court ${courtId} is already allotted` });
         }
@@ -159,14 +155,11 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/courts/:courtId/allot - Allot players for a specific court
-router.post('/:eventId/courts/:courtId/allot', async (req, res) => {
+// POST /events/:eventId/courts/:courtId/allot
+router.post('/:eventId/courts/:courtId/allot', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         if (!event.isStarted()) {
@@ -194,14 +187,11 @@ router.post('/:eventId/courts/:courtId/allot', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/games/:gameId/start - Start a game for score entry
-router.post('/:eventId/games/:gameId/start', async (req, res) => {
+// POST /events/:eventId/games/:gameId/start
+router.post('/:eventId/games/:gameId/start', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         const result = schedulingService.startGame(req.params.eventId, req.params.gameId);
@@ -215,14 +205,11 @@ router.post('/:eventId/games/:gameId/start', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/games/:gameId/end - End a game with score validation
-router.post('/:eventId/games/:gameId/end', async (req, res) => {
+// POST /events/:eventId/games/:gameId/end
+router.post('/:eventId/games/:gameId/end', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         const { score_team1, score_team2 } = req.body || {};
@@ -240,20 +227,18 @@ router.post('/:eventId/games/:gameId/end', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// POST /events/:eventId/games/:gameId/score - Submit scores for a game (before end)
-router.post('/:eventId/games/:gameId/score', async (req, res) => {
+// POST /events/:eventId/games/:gameId/score
+router.post('/:eventId/games/:gameId/score', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
         const { score_team1, score_team2 } = req.body;
         if (score_team1 === undefined || score_team2 === undefined) {
             return res.status(400).json({ error: 'Both scores are required' });
         }
-        const event = db.getEvent(req.params.eventId);
-        if (!event)
-            return res.status(404).json({ error: 'Event not found' });
-        if (event.ownerId !== req.user.id) {
+        const event = req.event;
+        if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
-        const game = event.games.find(g => g.id === req.params.gameId);
+        const game = event.games.find((g) => g.id === req.params.gameId);
         if (!game)
             return res.status(404).json({ error: 'Game not found' });
         if (!game.started)
@@ -268,53 +253,45 @@ router.post('/:eventId/games/:gameId/score', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// GET /events/:eventId/games - List all games for an event
-router.get('/:eventId/games', async (req, res) => {
+// GET /events/:eventId/games
+router.get('/:eventId/games', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
+        const event = req.event;
+        const shareAccess = req.shareAccess;
+        if (shareAccess && shareAccess.eventId === event.id) {
+            return res.json(event.gameHistory);
         }
-        if (event.ownerId !== req.user.id) {
-            return res.status(403).json({ error: 'Forbidden' });
-        }
-        res.json(event.gameHistory);
+        return res.json(event.gameHistory);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// GET /events/:eventId/status - Return current event progression
-router.get('/:eventId/status', async (req, res) => {
+// GET /events/:eventId/status
+router.get('/:eventId/status', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
-        if (!event) {
-            return res.status(404).json({ error: 'Event not found' });
-        }
-        if (event.ownerId !== req.user.id) {
-            return res.status(403).json({ error: 'Forbidden' });
-        }
+        const event = req.event;
         const avgGames = event.getAverageGamesPlayed();
         const availablePlayers = event.getAvailablePlayers();
-        const playingPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'PLAYING').length;
-        const waitingPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'WAITING').length;
-        const awayPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'AWAY').length;
-        const retiredPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'RETIRED').length;
-        const unavailablePlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'UNAVAILABLE').length;
-        const fulfilledPlayersCount = Array.from(event.registrations.values()).filter(r => r.gamesPlayedCount >= r.targetGames).length;
+        const playingPlayersCount = Array.from(event.registrations.values()).filter((r) => r.status === 'PLAYING').length;
+        const waitingPlayersCount = Array.from(event.registrations.values()).filter((r) => r.status === 'WAITING').length;
+        const awayPlayersCount = Array.from(event.registrations.values()).filter((r) => r.status === 'AWAY').length;
+        const retiredPlayersCount = Array.from(event.registrations.values()).filter((r) => r.status === 'RETIRED').length;
+        const unavailablePlayersCount = Array.from(event.registrations.values()).filter((r) => r.status === 'UNAVAILABLE').length;
+        const fulfilledPlayersCount = Array.from(event.registrations.values()).filter((r) => r.gamesPlayedCount >= r.targetGames).length;
         const courts = [];
         for (let c = 1; c <= event.courts; c++) {
-            const active = event.games.find(g => !g.completed && g.courtId === c);
+            const active = event.games.find((g) => !g.completed && g.courtId === c);
             courts.push({
                 courtId: c,
                 isAvailable: !active,
                 game: active ? {
                     id: active.id,
-                    team1: active.players.team1.map(id => ({
+                    team1: active.players.team1.map((id) => ({
                         id,
                         name: event.players.get(id)?.name || id.slice(0, 8)
                     })),
-                    team2: active.players.team2.map(id => ({
+                    team2: active.players.team2.map((id) => ({
                         id,
                         name: event.players.get(id)?.name || id.slice(0, 8)
                     })),
@@ -323,7 +300,7 @@ router.get('/:eventId/status', async (req, res) => {
                 } : null
             });
         }
-        const activeGames = event.games.filter(g => !g.completed);
+        const activeGames = event.games.filter((g) => !g.completed);
         res.json({
             eventId: event.id,
             eventName: event.name,
@@ -344,10 +321,10 @@ router.get('/:eventId/status', async (req, res) => {
             isEnded: event.isEnded(),
             endedAt: event.endedAt,
             courts,
-            players: Array.from(event.players.values()).map(p => {
+            players: Array.from(event.players.values()).map((p) => {
                 const reg = event.registrations.get(p.id);
                 const partnerIds = reg?.partners || [];
-                const partnerNames = partnerIds.map(pid => {
+                const partnerNames = partnerIds.map((pid) => {
                     const partner = event.players.get(pid);
                     return partner ? partner.name : pid.slice(0, 8);
                 });
@@ -361,19 +338,19 @@ router.get('/:eventId/status', async (req, res) => {
                     partnerIds
                 };
             }),
-            activeGames: activeGames.map(g => ({
+            activeGames: activeGames.map((g) => ({
                 id: g.id,
                 courtId: g.courtId,
                 team1: {
                     ids: g.players.team1,
-                    names: g.players.team1.map(id => {
+                    names: g.players.team1.map((id) => {
                         const p = event.players.get(id);
                         return p ? p.name : id.slice(0, 8);
                     })
                 },
                 team2: {
                     ids: g.players.team2,
-                    names: g.players.team2.map(id => {
+                    names: g.players.team2.map((id) => {
                         const p = event.players.get(id);
                         return p ? p.name : id.slice(0, 8);
                     })

@@ -48,6 +48,15 @@ export declare class Database {
     getAllEvents(): Event[];
     getEventsByOwner(ownerId: string): Event[];
     createEvent(name: string, totalGamesToPlay: number, numCourts: number, ownerId: string): Promise<Event>;
+    generateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{
+        token: string;
+    }>;
+    resolveShareToken(token: string): {
+        eventId: string;
+        permission: 'viewer' | 'moderator';
+    } | null;
+    getEventsForUser(userId: string): Event[];
+    getModeratedEvents(userId: string): Event[];
     getEventRegistration(eventId: string, playerId: string): EventPlayerRegistration | undefined;
     getAllEventRegistrations(eventId: string): EventPlayerRegistration[];
     createEventRegistration(eventId: string, playerId: string, targetGames: number): Promise<EventPlayerRegistration>;

@@ -10,10 +10,26 @@ const playerRoutes_1 = __importDefault(require("./routes/playerRoutes"));
 const gameRoutes_1 = __importDefault(require("./routes/gameRoutes"));
 const authRoutes_1 = __importDefault(require("./routes/authRoutes"));
 const node_path_1 = __importDefault(require("node:path"));
+const Database_1 = require("./storage/Database");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 0;
 app.use(express_1.default.json());
 app.use((0, cors_1.default)());
+// Public token resolution
+app.get('/share/:token', (req, res) => {
+    try {
+        const token = req.params.token;
+        const db = Database_1.Database.getInstance();
+        const access = db.resolveShareToken(token);
+        if (!access) {
+            return res.status(404).json({ error: 'Invalid or expired share link' });
+        }
+        res.json({ eventId: access.eventId, permission: access.permission });
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
 // Serve static frontend
 app.use(express_1.default.static(node_path_1.default.join(process.cwd(), 'public')));
 // Public auth routes

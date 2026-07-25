@@ -66,3 +66,15 @@ export interface AuthenticatedRequest extends Request {
     avatarUrl?: string;
   };
 }
+
+export interface ShareAccess {
+  eventId: string;
+  permission: 'viewer' | 'moderator';
+}
+
+export function extractShareToken(req: Request): ShareAccess | null {
+  const token = req.headers['x-share-token'];
+  if (!token || typeof token !== 'string') return null;
+  const db = Database.getInstance();
+  return db.resolveShareToken(token);
+}

@@ -1,15 +1,22 @@
-import { Router } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import { Database } from '../storage/Database';
 import { Event } from '../models/Event';
-import { authenticate, AuthenticatedRequest } from '../middleware/auth';
+import { authenticate, AuthenticatedRequest, ShareAccess } from '../middleware/auth';
+import { withEventAccess, loadEvent } from '../middleware/eventAccess';
 
 const router = Router();
 const db = Database.getInstance();
 
-router.use(authenticate);
+function isOwnerOrModerator(event: any, req: any): boolean {
+  const user = req.user as { id: string } | undefined;
+  const shareAccess = req.shareAccess as ShareAccess | undefined;
+  if (user && event.ownerId === user.id) return true;
+  if (shareAccess && shareAccess.eventId === event.id && shareAccess.permission === 'moderator') return true;
+  return false;
+}
 
 // POST /players - Create a global player
-router.post('/', async (req: AuthenticatedRequest, res) => {
+router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
     const { name } = req.body;
     if (!name) {
@@ -23,7 +30,7 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
 });
 
 // GET /players - List my players
-router.get('/', (req: AuthenticatedRequest, res) => {
+router.get('/', authenticate, (req: AuthenticatedRequest, res) => {
   try {
     const players = db.getPlayersByOwner(req.user!.id);
     res.json(players);
@@ -33,7 +40,7 @@ router.get('/', (req: AuthenticatedRequest, res) => {
 });
 
 // GET /players/:playerId - Retrieve player details
-router.get('/:playerId', async (req: AuthenticatedRequest, res) => {
+router.get('/:playerId', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
     const player = db.getPlayer(req.params.playerId as string);
     if (!player) {
@@ -49,13 +56,10 @@ router.get('/:playerId', async (req: AuthenticatedRequest, res) => {
 });
 
 // POST /events/:eventId/players - Register a player for an event
-router.post('/:eventId/players', async (req: AuthenticatedRequest, res) => {
+router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async (req: any, res: any) => {
   try {
-    const event = db.getEvent(req.params.eventId as string);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    if ((event as any).ownerId !== req.user!.id) {
+    const event = req.event;
+    if (!isOwnerOrModerator(event, req)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     const { player_id, name } = req.body;
@@ -66,7 +70,9 @@ router.post('/:eventId/players', async (req: AuthenticatedRequest, res) => {
       if (!player) {
         return res.status(404).json({ error: 'Player not found' });
       }
-      if ((player as any).ownerId !== req.user!.id) {
+      const isOwner = req.user && (player as any).ownerId === req.user.id;
+      const isModerator = req.shareAccess && req.shareAccess.permission === 'moderator';
+      if (!isOwner && !isModerator) {
         return res.status(403).json({ error: 'Forbidden' });
       }
     } else if (name) {
@@ -74,7 +80,11 @@ router.post('/:eventId/players', async (req: AuthenticatedRequest, res) => {
       if (existing) {
         player = existing;
       } else {
-        player = await db.createPlayer(name, req.user!.id);
+        const userId = req.user?.id;
+        if (!userId) {
+          return res.status(403).json({ error: 'Forbidden' });
+        }
+        player = await db.createPlayer(name, userId);
       }
     } else {
       return res.status(400).json({ error: 'Either player_id or name must be provided' });
@@ -94,13 +104,10 @@ router.post('/:eventId/players', async (req: AuthenticatedRequest, res) => {
 });
 
 // PATCH /events/:eventId/players/:playerId - Update player status for the event
-router.patch('/:eventId/players/:playerId', async (req: AuthenticatedRequest, res) => {
+router.patch('/:eventId/players/:playerId', withEventAccess as any, loadEvent as any, async (req: any, res: any) => {
   try {
-    const event = db.getEvent(req.params.eventId as string);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    if ((event as any).ownerId !== req.user!.id) {
+    const event = req.event;
+    if (!isOwnerOrModerator(event, req)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     const { status } = req.body;
@@ -129,7 +136,7 @@ router.patch('/:eventId/players/:playerId', async (req: AuthenticatedRequest, re
 });
 
 // DELETE /players/:playerId - Delete a global player
-router.delete('/:playerId', async (req: AuthenticatedRequest, res) => {
+router.delete('/:playerId', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
     const player = db.getPlayer(req.params.playerId as string);
     if (!player) {

@@ -12,4 +12,9 @@ export interface AuthenticatedRequest extends Request {
         avatarUrl?: string;
     };
 }
+export interface ShareAccess {
+    eventId: string;
+    permission: 'viewer' | 'moderator';
+}
+export declare function extractShareToken(req: Request): ShareAccess | null;
 //# sourceMappingURL=auth.d.ts.map

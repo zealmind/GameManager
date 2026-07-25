@@ -3,6 +3,8 @@ let currentEventId = null;
 const deadlockCourtErrors = new Map();
 let currentCompletedGamesFilter = '';
 let currentUser = null;
+let accessMode = null; // null | 'viewer' | 'moderator'
+let accessToken = null;
 
 const app = document.getElementById('main-content');
 const navBtns = document.querySelectorAll('.nav-btn');
@@ -92,11 +94,15 @@ async function api(url, options = {}) {
     const timeoutMs = options.timeoutMs || 6000;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
+        const headers = {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+        };
+        if (accessToken) {
+            headers['X-Share-Token'] = accessToken;
+        }
         const res = await fetch(url, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...(token ? { Authorization: `Bearer ${token}` } : {})
-            },
+            headers,
             signal: controller.signal,
             ...options
         });
@@ -127,6 +133,38 @@ function switchView(view) {
     }
 }
 
+function getAccessMode() {
+    const params = new URLSearchParams(window.location.search);
+    const viewer = params.get('viewer');
+    const moderator = params.get('moderator');
+    if (viewer) return { mode: 'viewer', token: viewer };
+    if (moderator) return { mode: 'moderator', token: moderator };
+    const stored = sessionStorage.getItem('gm_access');
+    if (stored) {
+        try {
+            const parsed = JSON.parse(stored);
+            if (parsed.token && parsed.mode) return parsed;
+        } catch {}
+    }
+    return null;
+}
+
+function setAccessMode(mode, token) {
+    accessMode = mode;
+    accessToken = token;
+    if (mode && token) {
+        sessionStorage.setItem('gm_access', JSON.stringify({ mode, token }));
+    } else {
+        sessionStorage.removeItem('gm_access');
+    }
+}
+
+function clearAccessMode() {
+    accessMode = null;
+    accessToken = null;
+    sessionStorage.removeItem('gm_access');
+}
+
 function initWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
@@ -135,7 +173,9 @@ function initWelcomeScreen() {
 
     if (!screen || !video || !btn) return;
 
-    console.log('[welcome] init start', { API_BASE, hasToken: !!getToken() });
+    const access = getAccessMode();
+
+    console.log('[welcome] init start', { API_BASE, hasToken: !!getToken(), accessMode: access?.mode });
 
     video.muted = true;
     video.volume = 0;
@@ -144,14 +184,37 @@ function initWelcomeScreen() {
         btn.textContent = '▶ Play & Enter';
     });
 
-    checkAuthState();
+    if (access) {
+        setAccessMode(access.mode, access.token);
+        btn.textContent = 'Enter Site';
+        setDebug('Shared access — no login required');
+        screen.classList.add('active');
+    } else {
+        checkAuthState();
+    }
 
-    btn.onclick = () => {
-        console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn() });
+    btn.onclick = async () => {
+        console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn(), accessMode, accessToken });
         if (btn.textContent === 'Enter Site') {
-            screen.classList.remove('active');
-            video.pause();
-            switchView('dashboard');
+            if (accessToken) {
+                try {
+                    console.log('[welcome] validating share token:', accessToken);
+                    const res = await api(`${API_BASE}/share/${accessToken}`);
+                    console.log('[welcome] share validation response:', res);
+                    setAccessMode(accessMode, accessToken);
+                    screen.classList.remove('active');
+                    video.pause();
+                    openEventDetail(res.eventId, true);
+                } catch (err) {
+                    console.error('[welcome] share validation error:', err);
+                    showToast('Invalid share link');
+                    clearAccessMode();
+                }
+            } else {
+                screen.classList.remove('active');
+                video.pause();
+                switchView('dashboard');
+            }
         } else {
             btn.classList.add('hidden');
             showLoginModal();
@@ -206,6 +269,7 @@ async function checkAuthState() {
 
 function logout() {
     clearUser();
+    clearAccessMode();
     switchView('dashboard');
 }
 
@@ -407,9 +471,13 @@ function renderEvents() {
 
 async function loadEventsList() {
     try {
-        const events = await api(`${API_BASE}/events`);
+        const [ownedEvents, sharedEvents] = await Promise.all([
+            api(`${API_BASE}/events`).catch(() => []),
+            api(`${API_BASE}/events/shared`).catch(() => [])
+        ]);
+        const allEvents = [...(ownedEvents || []), ...(sharedEvents || [])];
         const container = document.getElementById('events-list');
-        if (!events || !events.length) {
+        if (!allEvents.length) {
             container.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-state-icon">&#128197;</div>
@@ -417,15 +485,28 @@ async function loadEventsList() {
                 </div>`;
             return;
         }
-        container.innerHTML = events.map(e => `
+        const sharedIds = new Set((sharedEvents || []).map(e => e.id));
+        container.innerHTML = allEvents.map(e => {
+            const isShared = sharedIds.has(e.id) || (e.sharedAccess && e.sharedAccess.length > 0);
+            const isOwner = currentUser && e.ownerId === currentUser.id;
+            let actionHtml = '';
+            if (isOwner && isShared) {
+                actionHtml = `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> <span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
+            } else if (isOwner) {
+                actionHtml = `<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
+            } else {
+                actionHtml = '<span class="text-muted" style="font-size:11px;">Shared</span>';
+            }
+            return `
             <div class="list-item" data-event-id="${e.id}">
                 <div style="flex:1">
-                    <div class="list-item-title">${escapeHtml(e.name)}</div>
+                    <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
                     <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
-                <span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>
+                ${actionHtml}
             </div>
-        `).join('');
+        `;
+        }).join('');
         container.querySelectorAll('.list-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.classList.contains('delete-event-btn')) return;
@@ -440,6 +521,20 @@ async function loadEventsList() {
                 try {
                     await api(`${API_BASE}/events/${eventId}`, { method: 'DELETE' });
                     showToast('Event deleted');
+                    loadEventsList();
+                } catch (err) {
+                    showToast(err.message);
+                }
+            });
+        });
+        container.querySelectorAll('.unshare-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const eventId = btn.dataset.eventId;
+                if (!confirm('Remove all share links for this event?')) return;
+                try {
+                    await api(`${API_BASE}/events/${eventId}/share`, { method: 'DELETE' });
+                    showToast('All share links removed');
                     loadEventsList();
                 } catch (err) {
                     showToast(err.message);
@@ -518,14 +613,22 @@ function openCreateEventModal() {
     });
 }
 
-async function openEventDetail(eventId) {
+async function openEventDetail(eventId, fromShare = false) {
     currentEventId = eventId;
     navBtns.forEach(b => b.classList.remove('active'));
     app.innerHTML = `
         <div class="app-header">
             ${showBackButton()}
-            <h1>Event Detail</h1>
+            <div style="flex:1; min-width:0;">
+                <h1 id="event-title" style="font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Event Detail</h1>
+                <div id="event-status" class="card-subtitle" style="font-size:11px;"></div>
+            </div>
+            ${fromShare ? `<div class="shared-badge">Shared</div>` : ''}
+            ${accessMode === 'viewer' ? '<div class="shared-badge" style="background:#6b7280;">Viewing</div>' : ''}
+            ${accessMode === 'moderator' ? '<div class="shared-badge" style="background:#d97706;">Moderator</div>' : ''}
+            <div id="event-actions" style="display:flex; gap:4px;"></div>
         </div>
+        ${accessMode === 'viewer' ? '<div class="view-only-banner">You are viewing this event. All actions are disabled.</div>' : ''}
         <div id="event-detail">Loading...</div>
     `;
     document.getElementById('back-btn').addEventListener('click', () => switchView('dashboard'));
@@ -542,8 +645,24 @@ async function loadEventDetail(eventId) {
         const container = document.getElementById('event-detail');
         if (!container) return;
 
+        if (accessMode === 'viewer') {
+            container.setAttribute('data-readonly', 'true');
+        } else {
+            container.removeAttribute('data-readonly');
+        }
+
         const activeGames = (event.games || []).filter(g => !g.completed);
         const completedGames = event.gameHistory || [];
+
+        const titleEl = document.getElementById('event-title');
+        const statusEl = document.getElementById('event-status');
+        if (titleEl) titleEl.textContent = event.name;
+        if (statusEl) {
+            let statusText = 'Registration Phase';
+            if (status.isStarted && !status.isEnded) statusText = 'In Progress';
+            else if (status.isEnded) statusText = 'Ended';
+            statusEl.textContent = statusText;
+        }
 
         let phaseHtml = '';
         if (!status.isStarted) {
@@ -554,7 +673,7 @@ async function loadEventDetail(eventId) {
 
         container.innerHTML = phaseHtml;
 
-        if (status.isStarted && !status.isEnded) {
+        if (status.isStarted && !status.isEnded && accessMode !== 'moderator') {
             const endBtn = document.createElement('div');
             endBtn.style.cssText = 'text-align:center; margin-top:20px; padding-bottom:20px;';
             endBtn.innerHTML = '<button class="btn btn-danger" id="end-event-btn">End Event</button>';
@@ -562,6 +681,19 @@ async function loadEventDetail(eventId) {
         }
 
         bindEventDetailActions(eventId, event, status);
+
+        const actionsEl = document.getElementById('event-actions');
+        if (actionsEl && event.ownerId === (currentUser?.id || '')) {
+            actionsEl.innerHTML = `
+                <button class="btn btn-sm btn-secondary" id="share-view-btn">Share View</button>
+                <button class="btn btn-sm btn-secondary" id="share-moderate-btn">Invite Moderator</button>
+            `;
+            document.getElementById('share-view-btn')?.addEventListener('click', () => {
+    console.log('Share View clicked');
+    openShareModal(eventId, 'viewer');
+});
+            document.getElementById('share-moderate-btn')?.addEventListener('click', () => openShareModal(eventId, 'moderator'));
+        }
     } catch (err) {
         app.innerHTML = `<div class="empty-state"><p class="text-danger">Failed to load event</p><p class="text-muted">${escapeHtml(err.message)}</p></div>`;
     }
@@ -569,11 +701,6 @@ async function loadEventDetail(eventId) {
 
 function renderRegistrationPhase(event, status) {
     return `
-        <div class="card">
-            <div class="card-title">${escapeHtml(event.name)}</div>
-            <div class="card-subtitle">Registration Phase — Add players before starting</div>
-        </div>
-
         <div class="card">
             <div class="card-subtitle mb-2">Progress</div>
             <div class="status-bar">
@@ -703,11 +830,6 @@ function renderGamePhase(event, status, activeGames, completedGames) {
     };
 
     return `
-        <div class="card">
-            <div class="card-title">${escapeHtml(event.name)}</div>
-            <div class="card-subtitle">Started ${status.startedAt ? new Date(status.startedAt).toLocaleString() : ''} ${status.endedAt ? `| Ended ${new Date(status.endedAt).toLocaleString()}` : ''}</div>
-        </div>
-
         <div class="card">
             <div class="card-title" style="font-size:16px;">Leaderboard</div>
             <div id="leaderboard-list">
@@ -892,6 +1014,17 @@ function bindEventDetailActions(eventId, event, status) {
     const container = document.getElementById('event-detail');
     if (!container) return;
 
+    if (accessMode === 'viewer') {
+        container.querySelectorAll('button, .btn, .icon-btn').forEach(btn => {
+            btn.style.pointerEvents = 'none';
+            btn.style.opacity = '0.5';
+            btn.disabled = true;
+        });
+        return;
+    }
+
+    const isModerator = accessMode === 'moderator';
+
     if (!status.isStarted) {
         const startBtn = document.getElementById('start-event-btn');
         if (startBtn) {
@@ -929,18 +1062,20 @@ function bindEventDetailActions(eventId, event, status) {
             });
         });
     } else {
-        const endEventBtn = document.getElementById('end-event-btn');
-        if (endEventBtn) {
-            endEventBtn.addEventListener('click', async () => {
-                if (!confirm('Are you sure you want to end this event?')) return;
-                try {
-                    await api(`${API_BASE}/events/${eventId}/end`, { method: 'POST' });
-                    showToast('Event ended');
-                    loadEventDetail(eventId);
-                } catch (err) {
-                    showToast(err.message);
-                }
-            });
+        if (!isModerator) {
+            const endEventBtn = document.getElementById('end-event-btn');
+            if (endEventBtn) {
+                endEventBtn.addEventListener('click', async () => {
+                    if (!confirm('Are you sure you want to end this event?')) return;
+                    try {
+                        await api(`${API_BASE}/events/${eventId}/end`, { method: 'POST' });
+                        showToast('Event ended');
+                        loadEventDetail(eventId);
+                    } catch (err) {
+                        showToast(err.message);
+                    }
+                });
+            }
         }
 
         container.querySelectorAll('.allot-btn').forEach(btn => {
@@ -1483,6 +1618,63 @@ function openManualAllotModal(eventId, courtId) {
             errorEl.style.display = 'block';
         }
     });
+}
+
+function openShareModal(eventId, permission) {
+    const overlay = document.getElementById('share-modal');
+    const title = document.getElementById('share-modal-title');
+    const input = document.getElementById('share-link-input');
+    const copyBtn = document.getElementById('copy-share-btn');
+    const error = document.getElementById('share-error');
+    if (!overlay) return;
+
+    title.textContent = permission === 'moderator' ? 'Invite Moderator' : 'Share Event';
+    input.value = 'Generating...';
+    input.disabled = true;
+    copyBtn.disabled = true;
+    error.classList.add('hidden');
+    overlay.classList.add('active');
+
+    const endpoint = permission === 'moderator' ? '/invite-moderator' : '/share';
+    api(`${API_BASE}/events/${eventId}${endpoint}`, {
+        method: 'POST'
+    }).then(res => {
+        const link = `${window.location.origin}/?${permission}=${res.token}`;
+        input.value = link;
+        input.disabled = false;
+        copyBtn.disabled = false;
+        copyBtn.onclick = () => {
+            navigator.clipboard.writeText(link)
+                .then(() => showToast('Link copied!'))
+                .catch(err => {
+                    console.error("Clipboard copy failed:", err);
+                    const textarea = document.createElement('textarea');
+                    textarea.value = link;
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    try {
+                        document.execCommand('copy');
+                        showToast('Link copied!');
+                    } catch (e) {
+                        showToast('Copy failed. Try pasting manually.');
+                    } finally {
+                        document.body.removeChild(textarea);
+                    }
+                });
+        };
+    }).catch(err => {
+        input.value = 'Failed to generate link';
+        error.textContent = err.message;
+        error.classList.remove('hidden');
+    });
+
+    overlay.querySelector('.modal-close').onclick = closeShareModal;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeShareModal(); });
+}
+
+function closeShareModal() {
+    const overlay = document.getElementById('share-modal');
+    if (overlay) overlay.classList.remove('active');
 }
 
 // Initialize

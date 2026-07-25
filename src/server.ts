@@ -6,11 +6,28 @@ import gameRoutes from './routes/gameRoutes';
 import authRoutes from './routes/authRoutes';
 import path from 'node:path';
 
+import { Database } from './storage/Database';
+
 const app = express();
 const PORT = process.env.PORT || 0;
 
 app.use(express.json());
 app.use(cors());
+
+// Public token resolution
+app.get('/share/:token', (req, res) => {
+  try {
+    const token = req.params.token as string;
+    const db = Database.getInstance();
+    const access = db.resolveShareToken(token);
+    if (!access) {
+      return res.status(404).json({ error: 'Invalid or expired share link' });
+    }
+    res.json({ eventId: access.eventId, permission: access.permission });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Serve static frontend
 app.use(express.static(path.join(process.cwd(), 'public')));

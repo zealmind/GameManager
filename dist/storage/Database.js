@@ -124,7 +124,8 @@ class Database {
                 createdAt: g.createdAt.toISOString(),
                 startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
                 completedAt: g.completedAt?.toISOString()
-            }))
+            })),
+            sharedAccess: e.sharedAccess || []
         }));
         const registrationsData = Array.from(this.eventRegistrations.values());
         const data = { players: playersData, events: eventsData, eventRegistrations: registrationsData };
@@ -159,6 +160,7 @@ class Database {
                 event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
                 event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
                 event.ownerId = e.ownerId;
+                event.sharedAccess = e.sharedAccess || [];
                 for (const p of e.players) {
                     const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id);
                     if (!this.players.has(player.id)) {
@@ -263,9 +265,35 @@ class Database {
     async createEvent(name, totalGamesToPlay, numCourts, ownerId) {
         const event = new Event_1.Event(name, totalGamesToPlay, numCourts);
         event.ownerId = ownerId;
+        event.sharedAccess = [];
         this.events.set(event.id, event);
         await this.persist();
         return event;
+    }
+    async generateShareToken(eventId, permission, invitedBy) {
+        const event = this.events.get(eventId);
+        if (!event)
+            throw new Error('Event not found');
+        const token = node_crypto_1.default.randomBytes(16).toString('hex');
+        const access = { token, permission, invitedBy, createdAt: new Date().toISOString() };
+        event.sharedAccess.push(access);
+        await this.persist();
+        return { token };
+    }
+    resolveShareToken(token) {
+        for (const event of this.events.values()) {
+            const access = event.sharedAccess.find(a => a.token === token);
+            if (access) {
+                return { eventId: event.id, permission: access.permission };
+            }
+        }
+        return null;
+    }
+    getEventsForUser(userId) {
+        return Array.from(this.events.values()).filter((e) => e.ownerId === userId);
+    }
+    getModeratedEvents(userId) {
+        return Array.from(this.events.values()).filter((e) => e.ownerId !== userId && e.sharedAccess && e.sharedAccess.length > 0);
     }
     // Event Player Registration operations
     getEventRegistration(eventId, playerId) {

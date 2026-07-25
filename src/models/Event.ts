@@ -15,6 +15,7 @@ export class Event {
   nextGameNumber: number;
   startedAt?: Date;
   endedAt?: Date;
+  sharedAccess: Array<{ token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }>;
 
   constructor(name: string, totalGamesToPlay: number, numCourts: number) {
     this.id = randomUUID();
@@ -26,6 +27,7 @@ export class Event {
     this.totalGamesToPlay = totalGamesToPlay;
     this.gameHistory = []; // completed games
     this.nextGameNumber = 1;
+    this.sharedAccess = [];
   }
 
   isStarted(): boolean {
