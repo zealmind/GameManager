@@ -153,7 +153,6 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req: AuthenticatedR
       game = result.game;
     } else {
       game = createGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
-      game.gameNumber = event.nextGameNumber++;
     }
 
     const allGamePlayers = [...game.players.team1, ...game.players.team2];

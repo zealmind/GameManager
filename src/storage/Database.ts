@@ -351,14 +351,15 @@ export class Database {
 
   async createEventRegistration(eventId: string, playerId: string, targetGames: number): Promise<EventPlayerRegistration> {
     const key = `${eventId}_${playerId}`;
-    const registration: EventPlayerRegistration = {
-      eventId,
-      playerId,
-      gamesPlayedCount: 0,
-      status: 'WAITING',
-      targetGames,
-      partners: [],
-    };
+      const registration: EventPlayerRegistration = {
+        eventId,
+        playerId,
+        gamesPlayedCount: 0,
+        status: 'WAITING',
+        targetGames,
+        partners: [],
+        priority: 10,
+      };
     this.eventRegistrations.set(key, registration);
     await this.persist();
     return registration;

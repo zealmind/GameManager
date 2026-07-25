@@ -10,9 +10,12 @@ export declare class Event {
     courts: number;
     totalGamesToPlay: number;
     gameHistory: Game[];
+    nextGameNumber: number;
     startedAt?: Date;
+    endedAt?: Date;
     constructor(name: string, totalGamesToPlay: number, numCourts: number);
     isStarted(): boolean;
+    isEnded(): boolean;
     start(): void;
     addPlayer(player: Player): void;
     removePlayer(playerId: string): void;

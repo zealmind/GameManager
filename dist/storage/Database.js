@@ -109,6 +109,7 @@ class Database {
             courts: e.courts,
             totalGamesToPlay: e.totalGamesToPlay,
             startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
+            endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
             ownerId: e.ownerId || '',
             players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, ownerId: p.ownerId })),
             registrations: Array.from(e.registrations.values()),
@@ -156,6 +157,7 @@ class Database {
                 const event = new Event_1.Event(e.name, e.totalGamesToPlay, e.courts);
                 event.id = e.id;
                 event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
+                event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
                 event.ownerId = e.ownerId;
                 for (const p of e.players) {
                     const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id);
@@ -180,6 +182,8 @@ class Database {
                     startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
                     completedAt: g.completedAt ? new Date(g.completedAt) : undefined
                 }));
+                const allGameNumbers = [...event.games, ...event.gameHistory].map(g => g.gameNumber).filter((n) => typeof n === 'number');
+                event.nextGameNumber = allGameNumbers.length > 0 ? Math.max(...allGameNumbers) + 1 : 1;
                 this.events.set(event.id, event);
             }
             for (const r of data.eventRegistrations) {
@@ -279,6 +283,7 @@ class Database {
             status: 'WAITING',
             targetGames,
             partners: [],
+            priority: 10,
         };
         this.eventRegistrations.set(key, registration);
         await this.persist();

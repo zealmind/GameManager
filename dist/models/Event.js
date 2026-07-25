@@ -11,7 +11,9 @@ class Event {
     courts;
     totalGamesToPlay;
     gameHistory; // completed games
+    nextGameNumber;
     startedAt;
+    endedAt;
     constructor(name, totalGamesToPlay, numCourts) {
         this.id = (0, node_crypto_1.randomUUID)();
         this.name = name;
@@ -21,9 +23,13 @@ class Event {
         this.courts = numCourts;
         this.totalGamesToPlay = totalGamesToPlay;
         this.gameHistory = []; // completed games
+        this.nextGameNumber = 1;
     }
     isStarted() {
         return !!this.startedAt;
+    }
+    isEnded() {
+        return !!this.endedAt;
     }
     start() {
         if (this.isStarted())
@@ -47,6 +53,7 @@ class Event {
                 status: this.isStarted() ? 'WAITING' : 'WAITING',
                 targetGames: this.calculateInitialTargetGames(),
                 partners: [],
+                priority: 10,
             };
             this.registrations.set(player.id, registration);
         }
@@ -78,45 +85,17 @@ class Event {
         return updated;
     }
     // Calculate initial target games for a new player
-    // Each player should get at least 6 games; remaining games distributed
+    // Each player should get at least totalGamesToPlay games
     calculateInitialTargetGames() {
-        const playerCount = Math.max(this.players.size, 1);
-        const baseTarget = Math.floor(this.totalGamesToPlay / playerCount);
-        return Math.max(baseTarget, 6); // minimum 6 games per player
+        return this.totalGamesToPlay;
     }
     // Recalculate target games for all players based on current registration count
-    // This implements dynamic adjustment when availability changes
+    // Each available player should get at least totalGamesToPlay games
     recalculateTargetGames() {
-        const playerCount = this.players.size;
-        if (playerCount === 0)
-            return;
-        const totalTargetGames = this.totalGamesToPlay;
-        const minGamesPerPlayer = 6;
-        // Calculate how many players can get the minimum, and how many extra games to distribute
         const availablePlayers = Array.from(this.registrations.values()).filter(r => !['UNAVAILABLE', 'AWAY', 'RETIRED'].includes(r.status));
-        const availableCount = availablePlayers.length;
-        if (availableCount === 0)
-            return;
-        const minTotal = availableCount * minGamesPerPlayer;
-        if (totalTargetGames <= minTotal) {
-            // Not enough games for everyone to get 6, distribute equally
-            const baseTarget = Math.floor(totalTargetGames / availableCount);
-            const remainder = totalTargetGames % availableCount;
-            availablePlayers.forEach((reg, index) => {
-                const target = baseTarget + (index < remainder ? 1 : 0);
-                this.updateRegistration(reg.playerId, { targetGames: target });
-            });
-        }
-        else {
-            // Everyone gets at least 6, distribute remaining games
-            const remainingGames = totalTargetGames - minTotal;
-            const extraPerPlayer = Math.floor(remainingGames / availableCount);
-            const extraRemainder = remainingGames % availableCount;
-            availablePlayers.forEach((reg, index) => {
-                const target = minGamesPerPlayer + extraPerPlayer + (index < extraRemainder ? 1 : 0);
-                this.updateRegistration(reg.playerId, { targetGames: target });
-            });
-        }
+        availablePlayers.forEach(reg => {
+            this.updateRegistration(reg.playerId, { targetGames: this.totalGamesToPlay });
+        });
     }
     // Helper methods for scheduling logic
     getAvailablePlayers() {
@@ -149,11 +128,8 @@ class Event {
             return deficitB - deficitA; // most negative deficit first
         });
     }
-    // Check if event is complete
     isComplete() {
-        // Event completes when total games played reaches target AND distribution is as fair as possible
-        // For simplicity, we consider complete when we've played totalGamesToPlay games
-        return this.gameHistory.length >= this.totalGamesToPlay;
+        return this.isEnded();
     }
 }
 exports.Event = Event;

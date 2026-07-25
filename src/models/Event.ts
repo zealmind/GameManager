@@ -58,6 +58,7 @@ export class Event {
         status: this.isStarted() ? 'WAITING' : 'WAITING',
         targetGames: this.calculateInitialTargetGames(),
         partners: [],
+        priority: 10,
       };
       this.registrations.set(player.id, registration);
     }

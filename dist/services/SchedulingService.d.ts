@@ -10,9 +10,11 @@ export interface ScheduleResult {
 export declare class SchedulingService {
     private db;
     constructor();
+    getPlayerPriority(playerId: string, event: Event): number;
     getAvailablePlayers(event: Event): import("../models").Player[];
     hasPlayedTogether(player1Id: string, player2Id: string, event: Event): boolean;
     assignNextGame(eventId: string, courtId: number): ScheduleResult;
+    completePartialGame(eventId: string, courtId: number, team1: string[], team2: string[]): ScheduleResult;
     startGame(eventId: string, gameId: string): ScheduleResult;
     endGame(eventId: string, gameId: string, scores?: {
         score_team1?: number;

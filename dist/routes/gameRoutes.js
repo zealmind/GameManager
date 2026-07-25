@@ -71,6 +71,30 @@ router.post('/:eventId/schedule', async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
+// POST /events/:eventId/end - End an event manually
+router.post('/:eventId/end', async (req, res) => {
+    try {
+        const event = db.getEvent(req.params.eventId);
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        if (!event.isStarted()) {
+            return res.status(400).json({ error: 'Event has not started yet' });
+        }
+        if (event.isEnded()) {
+            return res.status(400).json({ error: 'Event has already been ended' });
+        }
+        event.endedAt = new Date();
+        await db.persist();
+        res.json({ success: true, endedAt: event.endedAt });
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
 // POST /events/:eventId/courts/:courtId/allot-manual - Manual allotment with specific players
 router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
     try {
@@ -90,13 +114,13 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
             return res.status(400).json({ error: `Court ${courtId} is already allotted` });
         }
         const { team1, team2 } = req.body || {};
-        if (!team1 || !Array.isArray(team1) || team1.length !== 2 ||
-            !team2 || !Array.isArray(team2) || team2.length !== 2) {
-            return res.status(400).json({ error: 'Must provide team1 and team2 arrays with 2 players each' });
+        if ((!team1 || !Array.isArray(team1) || team1.length < 1) &&
+            (!team2 || !Array.isArray(team2) || team2.length < 1)) {
+            return res.status(400).json({ error: 'Must provide at least 1 player in team1 or team2' });
         }
-        const allPlayerIds = [...team1, ...team2];
-        if (new Set(allPlayerIds).size !== 4) {
-            return res.status(400).json({ error: 'All 4 players must be distinct' });
+        const allPlayerIds = [...team1, ...team2].filter(Boolean);
+        if (new Set(allPlayerIds).size !== allPlayerIds.length) {
+            return res.status(400).json({ error: 'All players must be distinct' });
         }
         for (const pid of allPlayerIds) {
             const reg = event.getRegistration(pid);
@@ -107,8 +131,24 @@ router.post('/:eventId/courts/:courtId/allot-manual', async (req, res) => {
                 return res.status(400).json({ error: `Player is not available (status: ${reg.status})` });
             }
         }
-        const game = (0, Game_1.createGame)(req.params.eventId, courtId, [team1[0], team1[1], team2[0], team2[1]]);
-        for (const pid of allPlayerIds) {
+        const team1Clean = team1.filter(Boolean);
+        const team2Clean = team2.filter(Boolean);
+        let game;
+        if (team1Clean.length + team2Clean.length < 4) {
+            const result = schedulingService.completePartialGame(req.params.eventId, courtId, team1Clean, team2Clean);
+            if (!result.success || !result.game) {
+                return res.status(409).json({
+                    error: result.reason,
+                    blockingConstraints: result.blockingConstraints
+                });
+            }
+            game = result.game;
+        }
+        else {
+            game = (0, Game_1.createGame)(req.params.eventId, courtId, team1Clean, team2Clean);
+        }
+        const allGamePlayers = [...game.players.team1, ...game.players.team2];
+        for (const pid of allGamePlayers) {
             event.updateRegistration(pid, { status: 'PLAYING' });
         }
         event.games.push(game);
@@ -261,6 +301,7 @@ router.get('/:eventId/status', async (req, res) => {
         const awayPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'AWAY').length;
         const retiredPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'RETIRED').length;
         const unavailablePlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'UNAVAILABLE').length;
+        const fulfilledPlayersCount = Array.from(event.registrations.values()).filter(r => r.gamesPlayedCount >= r.targetGames).length;
         const courts = [];
         for (let c = 1; c <= event.courts; c++) {
             const active = event.games.find(g => !g.completed && g.courtId === c);
@@ -296,9 +337,12 @@ router.get('/:eventId/status', async (req, res) => {
             awayPlayers: awayPlayersCount,
             retiredPlayers: retiredPlayersCount,
             unavailablePlayers: unavailablePlayersCount,
+            fulfilledPlayers: fulfilledPlayersCount,
             isComplete: event.isComplete(),
             isStarted: event.isStarted(),
             startedAt: event.startedAt,
+            isEnded: event.isEnded(),
+            endedAt: event.endedAt,
             courts,
             players: Array.from(event.players.values()).map(p => {
                 const reg = event.registrations.get(p.id);
@@ -311,6 +355,7 @@ router.get('/:eventId/status', async (req, res) => {
                     id: p.id,
                     name: p.name,
                     gamesPlayed: reg?.gamesPlayedCount || 0,
+                    targetGames: reg?.targetGames || 0,
                     status: reg?.status || 'UNKNOWN',
                     partners: partnerNames,
                     partnerIds

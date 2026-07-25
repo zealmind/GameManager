@@ -1,10 +1,11 @@
 export interface Game {
     id: string;
     eventId: string;
+    gameNumber: number;
     courtId: number;
     players: {
-        team1: [string, string];
-        team2: [string, string];
+        team1: string[];
+        team2: string[];
     };
     scores?: [number, number];
     createdAt: Date;
@@ -13,5 +14,5 @@ export interface Game {
     startedAt?: Date;
     completedAt?: Date;
 }
-export declare function createGame(eventId: string, courtId: number, players: [string, string, string, string]): Game;
+export declare function createGame(eventId: string, courtId: number, team1: string[], team2: string[]): Game;
 //# sourceMappingURL=Game.d.ts.map

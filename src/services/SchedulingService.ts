@@ -17,25 +17,32 @@ export class SchedulingService {
     this.db = Database.getInstance();
   }
 
+  getPlayerPriority(playerId: string, event: Event): number {
+    const reg = event.getRegistration(playerId);
+    if (!reg) return 0;
+    if (reg.gamesPlayedCount === 0) return 10;
+    if (reg.gamesPlayedCount >= reg.targetGames) return 0;
+    return reg.priority;
+  }
+
   getAvailablePlayers(event: Event) {
     const allPlayers = Array.from(event.players.values());
     return allPlayers
       .filter(p => {
         const reg = event.getRegistration(p.id);
-        return reg && reg.status === 'WAITING';
-      })
-      .map(p => {
-        const reg = event.getRegistration(p.id)!;
-        const avg = event.getAverageGamesPlayed();
-        const deficit = avg - reg.gamesPlayedCount;
-        return { player: p, deficit, gamesPlayedCount: reg.gamesPlayedCount };
+        if (!reg || reg.status !== 'WAITING') return false;
+        const priority = this.getPlayerPriority(p.id, event);
+        return priority > 0;
       })
       .sort((a, b) => {
-        const diff = a.deficit - b.deficit;
-        if (Math.abs(diff) > 0.001) return diff;
-        return a.player.id.localeCompare(b.player.id);
-      })
-      .map(item => item.player);
+        const priorityA = this.getPlayerPriority(a.id, event);
+        const priorityB = this.getPlayerPriority(b.id, event);
+        if (priorityB !== priorityA) return priorityB - priorityA;
+        const regA = event.getRegistration(a.id)!;
+        const regB = event.getRegistration(b.id)!;
+        if (regA.gamesPlayedCount !== regB.gamesPlayedCount) return regA.gamesPlayedCount - regB.gamesPlayedCount;
+        return Math.random() - 0.5;
+      });
   }
 
   hasPlayedTogether(player1Id: string, player2Id: string, event: Event): boolean {
@@ -105,7 +112,6 @@ export class SchedulingService {
 
         const playerIds = [team1[0].id, team1[1].id, team2[0].id, team2[1].id];
         const game = createGame(eventId, courtId, [team1[0].id, team1[1].id], [team2[0].id, team2[1].id]);
-        game.gameNumber = event.nextGameNumber++;
 
         const allPlayers = [...team1, ...team2];
         for (const p of allPlayers) {
@@ -126,8 +132,7 @@ export class SchedulingService {
         const team1 = [topPlayer];
         const team2 = [remaining[0], remaining[1]];
         if (!this.hasPlayedTogether(remaining[0].id, remaining[1].id, event)) {
-          const game = createGame(eventId, courtId, [topPlayer.id], [remaining[0].id, remaining[1].id]);
-          game.gameNumber = event.nextGameNumber++;
+           const game = createGame(eventId, courtId, [topPlayer.id], [remaining[0].id, remaining[1].id]);
 
           for (const p of [...team1, ...team2]) {
             event.updateRegistration(p.id, { status: 'PLAYING' });
@@ -185,7 +190,6 @@ export class SchedulingService {
     const totalSelected = team1.length + team2.length;
     if (totalSelected >= 4) {
       const game = createGame(eventId, courtId, team1, team2);
-      game.gameNumber = event.nextGameNumber++;
       for (const pid of selectedIds) {
         event.updateRegistration(pid, { status: 'PLAYING' });
       }
@@ -226,7 +230,6 @@ export class SchedulingService {
       const finalTeam2 = [...team2];
       const usedInFill = new Set([...opponentPair, partnerId]);
 
-      // Distribute filled players: try to balance teams
       const t1Count = finalTeam1.length;
       const t2Count = finalTeam2.length;
 
@@ -252,9 +255,9 @@ export class SchedulingService {
         finalTeam2.push(partnerId);
       }
 
-      const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
-      game.gameNumber = event.nextGameNumber++;
-      for (const pid of [...finalTeam1, ...finalTeam2]) {
+const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
+
+        for (const pid of [...finalTeam1, ...finalTeam2]) {
         event.updateRegistration(pid, { status: 'PLAYING' });
       }
       event.games.push(game);
@@ -284,8 +287,8 @@ export class SchedulingService {
             continue;
           }
 
-          const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
-          game.gameNumber = event.nextGameNumber++;
+const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
+
           for (const pid of [...finalTeam1, ...finalTeam2]) {
             event.updateRegistration(pid, { status: 'PLAYING' });
           }
@@ -304,6 +307,8 @@ export class SchedulingService {
     const game = event.games.find(g => g.id === gameId);
     if (!game) return { success: false, reason: 'Game not found' };
     if (game.completed) return { success: false, reason: 'Game already completed' };
+    if (game.started) return { success: false, reason: 'Game has already started' };
+    game.gameNumber = event.nextGameNumber++;
     game.started = true;
     game.startedAt = new Date();
     return { success: true, game };
@@ -348,6 +353,50 @@ export class SchedulingService {
         const teammate = allPlayerIds.find(pid => pid !== playerId && team1Ids.has(pid) === team1Ids.has(playerId));
         if (teammate && !reg.partners.includes(teammate)) {
           reg.partners.push(teammate);
+        }
+      }
+    }
+
+    // Priority recency check (Step 6)
+    const justFinishedIds = allPlayerIds;
+    const wasBackToBack = new Set<string>();
+    for (const pid of justFinishedIds) {
+      const reg = event.getRegistration(pid);
+      if (reg && this.getPlayerPriority(pid, event) === 7) {
+        wasBackToBack.add(pid);
+      }
+    }
+    for (const pid of justFinishedIds) {
+      const reg = event.getRegistration(pid);
+      if (reg && reg.status === 'WAITING') {
+        reg.priority = 5;
+      }
+    }
+    const newPlayerCount = event.getAvailablePlayers().filter(p => this.getPlayerPriority(p.id, event) === 10).length;
+    if (newPlayerCount === 0 || newPlayerCount < 3) {
+      const promoteCount = Math.random() < 0.5 ? 1 : 2;
+      let promoted = 0;
+      const promotedIds = new Set<string>();
+      for (const pid of justFinishedIds) {
+        if (!wasBackToBack.has(pid)) {
+          const reg = event.getRegistration(pid);
+          if (reg && reg.status === 'WAITING') {
+            reg.priority = 7;
+            promoted++;
+            promotedIds.add(pid);
+            if (promoted >= promoteCount) break;
+          }
+        }
+      }
+      if (promoted < promoteCount) {
+        for (const pid of justFinishedIds) {
+          if (promotedIds.has(pid)) continue;
+          const reg = event.getRegistration(pid);
+          if (reg && reg.status === 'WAITING') {
+            reg.priority = 7;
+            promoted++;
+            if (promoted >= promoteCount) break;
+          }
         }
       }
     }
