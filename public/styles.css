@@ -256,6 +256,17 @@ html, body {
     font-size: 13px;
 }
 
+/* Player status indicators */
+.fulfilled-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background: #22c55e;
+    border-radius: 50%;
+    margin-right: 4px;
+    flex-shrink: 0;
+}
+
 /* Badges */
 .badge {
     display: inline-block;
@@ -995,6 +1006,22 @@ html, body {
     flex-shrink: 0;
     transition: color 0.15s, background 0.15s;
     user-select: none;
+}
+
+.games-played-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    background: var(--primary);
+    color: white;
+    border-radius: 50%;
+    font-size: 9px;
+    font-weight: 700;
+    margin-left: 6px;
+    flex-shrink: 0;
+    line-height: 1;
 }
 
 .delete-link:hover {

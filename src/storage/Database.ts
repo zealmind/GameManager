@@ -14,6 +14,7 @@ interface SerializedPlayer {
 interface SerializedGame {
   id: string;
   eventId: string;
+  gameNumber: number;
   courtId: number;
   players: {
     team1: [string, string];
@@ -33,6 +34,7 @@ interface SerializedEvent {
   courts: number;
   totalGamesToPlay: number;
   startedAt?: string;
+  endedAt?: string;
   ownerId: string;
   players: SerializedPlayer[];
   registrations: EventPlayerRegistration[];
@@ -146,6 +148,7 @@ export class Database {
       courts: e.courts,
       totalGamesToPlay: e.totalGamesToPlay,
       startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
+      endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
       ownerId: (e as any).ownerId || '',
       players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, ownerId: (p as any).ownerId })),
       registrations: Array.from(e.registrations.values()),
@@ -206,6 +209,7 @@ export class Database {
         const event = new Event(e.name, e.totalGamesToPlay, e.courts);
         event.id = e.id;
         event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
+        event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
         (event as any).ownerId = e.ownerId;
 
         for (const p of e.players) {
@@ -234,6 +238,9 @@ export class Database {
           startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
           completedAt: g.completedAt ? new Date(g.completedAt) : undefined
         }));
+
+        const allGameNumbers = [...event.games, ...event.gameHistory].map(g => g.gameNumber).filter((n): n is number => typeof n === 'number');
+        event.nextGameNumber = allGameNumbers.length > 0 ? Math.max(...allGameNumbers) + 1 : 1;
 
         this.events.set(event.id, event);
       }

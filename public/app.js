@@ -36,15 +36,23 @@ function showToast(msg) {
     setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
+let currentNickNameMap = new Map();
+
 function buildNickNameMap(players) {
     if (!players || !players.length) return new Map();
+    const key = players.map(p => p.id).sort().join(',');
+    if (currentNickNameMap.size > 0 && currentNickNameMap.get('__key__') === key) {
+        return currentNickNameMap;
+    }
+    const map = new Map();
+    map.set('__key__', key);
     const shuffled = [...players];
     for (let i = shuffled.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
-    const map = new Map();
     shuffled.forEach((p, i) => map.set(p.id, String.fromCharCode(65 + i)));
+    currentNickNameMap = map;
     return map;
 }
 
@@ -56,6 +64,26 @@ function getPlayerLabel(player, nickNameMap, showNickNames) {
     if (!showNickNames) return player.name;
     const nick = getPlayerNickName(player.id, nickNameMap);
     return nick ? `(${nick}) ` + player.name : player.name;
+}
+
+function getPlayerDisplayName(player, nickNameMap, showNickNames, statusMap) {
+    const label = getPlayerLabel(player, nickNameMap, showNickNames);
+    const escapedLabel = escapeHtml(label);
+    if (player.gamesPlayed >= player.targetGames) {
+        return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
+    }
+    return escapedLabel;
+}
+
+function getGamePlayerDisplayName(playerId, status, nickNameMap) {
+    const player = status.players.find(p => p.id === playerId);
+    if (!player) return escapeHtml(playerId.slice(0, 8));
+    const label = getPlayerLabel(player, nickNameMap, true);
+    const escapedLabel = escapeHtml(label);
+    if (player.gamesPlayed >= player.targetGames) {
+        return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
+    }
+    return escapedLabel;
 }
 
 async function api(url, options = {}) {
@@ -439,11 +467,11 @@ function openCreateEventModal() {
                 </div>
                 <div class="form-group">
                     <label>Allowed number of Games per player</label>
-                    <input type="number" name="totalGamesToPlay" required min="1" value="18">
+                    <input type="number" name="totalGamesToPlay" required min="1" value="6">
                 </div>
                 <div class="form-group">
                     <label>Number of Courts</label>
-                    <input type="number" name="numCourts" required min="1" value="3">
+                    <input type="number" name="numCourts" required min="1" value="2">
                 </div>
                 <button type="submit" class="btn btn-primary">Create Event</button>
             </form>
@@ -565,7 +593,7 @@ function renderRegistrationPhase(event, status) {
                 ${status.players.length ? status.players.map(p => `
                     <div class="player-row">
                         <div class="player-info">
-                            <div class="player-name">${escapeHtml(p.name)}</div>
+                            <div class="player-name">${escapeHtml(p.name)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
                         </div>
                         <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${p.id}">Unregister</button>
                     </div>
@@ -582,6 +610,7 @@ function renderRegistrationPhase(event, status) {
 
 function renderGamePhase(event, status, activeGames, completedGames) {
     const maxCourt = event.courts || 1;
+    const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
     let courtsHtml = '';
     status.courts.forEach(court => {
         const deadlockError = deadlockCourtErrors.get(court.courtId);
@@ -601,8 +630,8 @@ function renderGamePhase(event, status, activeGames, completedGames) {
             <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
         if (court.game && !court.game.started) {
             const g = court.game;
-            const team1Names = g.team1.map(p => escapeHtml(p.name)).join(', ');
-            const team2Names = g.team2.map(p => escapeHtml(p.name)).join(', ');
+            const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
+            const team2Names = g.team2.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}">
                     <div class="game-teams">
@@ -616,8 +645,8 @@ function renderGamePhase(event, status, activeGames, completedGames) {
             `;
         } else if (court.game && court.game.started) {
             const g = court.game;
-            const team1Names = g.team1.map(p => escapeHtml(p.name)).join(', ');
-            const team2Names = g.team2.map(p => escapeHtml(p.name)).join(', ');
+            const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
+            const team2Names = g.team2.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}">
                     <div class="game-teams">
@@ -632,9 +661,11 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                             <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
                         </div>
                         <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
-                    </div>
-                </div>
-            `;
+            </div>
+        </div>
+
+        ${!status.isEnded && status.isStarted ? `<button class="btn btn-danger" id="end-event-btn">End Event</button>` : ''}
+    `;
         }
         courtsHtml += `</div>`;
     });
@@ -643,6 +674,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
     const playing = status.players.filter(p => p.status === 'PLAYING');
     const away = status.players.filter(p => p.status === 'AWAY');
     const retired = status.players.filter(p => p.status === 'RETIRED');
+    const fulfilled = status.players.filter(p => p.status === 'FULLFILLED');
 
     const renderPlayerGroup = (title, players, showActions) => {
         if (!players.length) return '';
@@ -654,7 +686,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     ${players.map(p => `
                         <div class="player-row">
                             <div class="player-info">
-                                <div class="player-name">${escapeHtml(getPlayerLabel(p, nickNameMap, true))}</div>
+                                <div class="player-name">${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
                             </div>
                             ${showActions ? getPlayerActionButtons(p) : ''}
                         </div>
@@ -667,7 +699,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
     return `
         <div class="card">
             <div class="card-title">${escapeHtml(event.name)}</div>
-            <div class="card-subtitle">Started ${status.startedAt ? new Date(status.startedAt).toLocaleString() : ''}</div>
+            <div class="card-subtitle">Started ${status.startedAt ? new Date(status.startedAt).toLocaleString() : ''} ${status.endedAt ? `| Ended ${new Date(status.endedAt).toLocaleString()}` : ''}</div>
         </div>
 
         <div class="card">
@@ -677,10 +709,12 @@ function renderGamePhase(event, status, activeGames, completedGames) {
             </div>
         </div>
 
+        ${!status.isEnded ? `
         <div class="card">
             <div class="card-subtitle mb-2">Game Field</div>
             ${courtsHtml}
         </div>
+        ` : ''}
 
         <div class="card">
             <div class="flex justify-between items-center mb-2">
@@ -690,6 +724,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
             <div id="players-list" class="${status.isStarted ? 'players-section-collapsed' : ''}">
                 ${renderPlayerGroup('Waiting', waiting, true)}
                 ${renderPlayerGroup('Playing', playing, false)}
+                ${renderPlayerGroup('Fulfilled', fulfilled, true)}
                 ${renderPlayerGroup('Away', away, true)}
                 ${renderPlayerGroup('Retired', retired, false)}
             </div>
@@ -697,10 +732,10 @@ function renderGamePhase(event, status, activeGames, completedGames) {
 
         <div class="card">
             <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Completed Games &#9662;</div>
+                <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
                 <select id="completed-games-player-filter" class="player-filter-select">
                     <option value="">All Players</option>
-                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${escapeHtml(getPlayerLabel(p, nickNameMap))}</option>`).join(''); })()}
+                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''); })()}
                 </select>
             </div>
             <div id="completed-games-list">
@@ -710,9 +745,9 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                 }).map(g => `
                     <div class="game-card completed-game-card" data-game-id="${g.id}">
                         <div class="game-teams">
-                            <div class="game-team">Team 1: ${g.players.team1.map(id => resolvePlayerName(id, status)).join(', ')}</div>
-                            <div class="game-team">Team 2: ${g.players.team2.map(id => resolvePlayerName(id, status)).join(', ')}</div>
-                            <div class="game-status status-completed">Completed</div>
+                            <div class="game-team">Team 1: ${g.players.team1.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
+                            <div class="game-team">Team 2: ${g.players.team2.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
+                            <div class="game-status status-completed">Game #${g.gameNumber}</div>
                             <div class="game-meta">
                                 court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
                                 ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
@@ -747,7 +782,7 @@ function getPlayerActionButtons(player) {
             <button class="btn btn-warning btn-sm status-action-btn" data-player-id="${player.id}" data-status="AWAY">Take Break</button>
             <button class="btn btn-danger btn-sm status-action-btn" data-player-id="${player.id}" data-status="RETIRED">Retire</button>
         `;
-    } else if (player.status === 'AWAY') {
+    } else if (player.status === 'FULLFILLED' || player.status === 'AWAY') {
         return `<button class="btn btn-success btn-sm status-action-btn" data-player-id="${player.id}" data-status="WAITING">I'm Ready</button>`;
     }
     return '';
@@ -822,14 +857,14 @@ function renderLeaderboard(status, completedGames) {
     }
 
     const nickNameMap = buildNickNameMap(status.players);
+    const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
 
     return `
         <div class="leaderboard">
             ${sorted.map((p, idx) => {
                 const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
                 const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
-                const nick = getPlayerNickName(p.id, nickNameMap);
-                const playerLabel = nick ? `${escapeHtml(p.name)} (${nick})` : escapeHtml(p.name);
+                const playerLabel = getPlayerDisplayName(p, nickNameMap, true, playerStatusMap);
                 const partnersStr = (p.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None';
                 return `
                 <div class="leaderboard-row">
@@ -888,6 +923,20 @@ function bindEventDetailActions(eventId, event, status) {
             });
         });
     } else {
+        const endEventBtn = document.getElementById('end-event-btn');
+        if (endEventBtn) {
+            endEventBtn.addEventListener('click', async () => {
+                if (!confirm('Are you sure you want to end this event?')) return;
+                try {
+                    await api(`${API_BASE}/events/${eventId}/end`, { method: 'POST' });
+                    showToast('Event ended');
+                    loadEventDetail(eventId);
+                } catch (err) {
+                    showToast(err.message);
+                }
+            });
+        }
+
         container.querySelectorAll('.allot-btn').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
@@ -1041,10 +1090,12 @@ function bindEventDetailActions(eventId, event, status) {
     const completedGamesList = document.getElementById('completed-games-list');
     const completedGamesToggle = document.getElementById('completed-games-toggle');
     if (completedGamesList && completedGamesToggle) {
-        completedGamesList.classList.add('completed-games-collapsed');
+        if (!status.isEnded) {
+            completedGamesList.classList.add('completed-games-collapsed');
+        }
         completedGamesToggle.addEventListener('click', () => {
             const isCollapsed = completedGamesList.classList.toggle('completed-games-collapsed');
-            completedGamesToggle.innerHTML = `Completed Games ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+            completedGamesToggle.innerHTML = `Game Stats ${isCollapsed ? '&#9662;' : '&#9652;'}`;
         });
     }
 

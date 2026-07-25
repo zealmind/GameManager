@@ -74,6 +74,30 @@ router.post('/:eventId/schedule', async (req: AuthenticatedRequest, res) => {
   }
 });
 
+// POST /events/:eventId/end - End an event manually
+router.post('/:eventId/end', async (req: AuthenticatedRequest, res) => {
+  try {
+    const event = db.getEvent(req.params.eventId as string);
+    if (!event) {
+      return res.status(404).json({ error: 'Event not found' });
+    }
+    if ((event as any).ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    if (!event.isStarted()) {
+      return res.status(400).json({ error: 'Event has not started yet' });
+    }
+    if (event.isEnded()) {
+      return res.status(400).json({ error: 'Event has already been ended' });
+    }
+    event.endedAt = new Date();
+    await db.persist();
+    res.json({ success: true, endedAt: event.endedAt });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // POST /events/:eventId/courts/:courtId/allot-manual - Manual allotment with specific players
 router.post('/:eventId/courts/:courtId/allot-manual', async (req: AuthenticatedRequest, res) => {
   try {
@@ -271,6 +295,7 @@ router.get('/:eventId/status', async (req: AuthenticatedRequest, res) => {
     const awayPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'AWAY').length;
     const retiredPlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'RETIRED').length;
     const unavailablePlayersCount = Array.from(event.registrations.values()).filter(r => r.status === 'UNAVAILABLE').length;
+    const fulfilledPlayersCount = Array.from(event.registrations.values()).filter(r => r.gamesPlayedCount >= r.targetGames).length;
 
     const courts: any[] = [];
     for (let c = 1; c <= event.courts; c++) {
@@ -309,9 +334,12 @@ router.get('/:eventId/status', async (req: AuthenticatedRequest, res) => {
       awayPlayers: awayPlayersCount,
       retiredPlayers: retiredPlayersCount,
       unavailablePlayers: unavailablePlayersCount,
+      fulfilledPlayers: fulfilledPlayersCount,
       isComplete: event.isComplete(),
       isStarted: event.isStarted(),
       startedAt: event.startedAt,
+      isEnded: event.isEnded(),
+      endedAt: event.endedAt,
       courts,
       players: Array.from(event.players.values()).map(p => {
         const reg = event.registrations.get(p.id);
@@ -324,6 +352,7 @@ router.get('/:eventId/status', async (req: AuthenticatedRequest, res) => {
           id: p.id,
           name: p.name,
           gamesPlayed: reg?.gamesPlayedCount || 0,
+          targetGames: reg?.targetGames || 0,
           status: reg?.status || 'UNKNOWN',
           partners: partnerNames,
           partnerIds

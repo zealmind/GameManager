@@ -28,12 +28,12 @@ export class SchedulingService {
         const reg = event.getRegistration(p.id)!;
         const avg = event.getAverageGamesPlayed();
         const deficit = avg - reg.gamesPlayedCount;
-        return { player: p, deficit };
+        return { player: p, deficit, gamesPlayedCount: reg.gamesPlayedCount };
       })
       .sort((a, b) => {
         const diff = a.deficit - b.deficit;
         if (Math.abs(diff) > 0.001) return diff;
-        return Math.random() - 0.5;
+        return a.player.id.localeCompare(b.player.id);
       })
       .map(item => item.player);
   }
@@ -49,7 +49,7 @@ export class SchedulingService {
       return { success: false, reason: 'Event not found', blockingConstraints: ['Event does not exist'] };
     }
     if (event.isComplete()) {
-      return { success: false, reason: 'Event is already complete', blockingConstraints: ['All scheduled games have been played'] };
+      return { success: false, reason: 'Event has been ended', blockingConstraints: ['No more games can be scheduled'] };
     }
     if (courtId < 1 || courtId > event.courts) {
       return { success: false, reason: 'Invalid court number', blockingConstraints: [`Court ${courtId} does not exist`] };
@@ -76,7 +76,7 @@ export class SchedulingService {
     }
 
     if (available.length < 4) {
-      return { success: false, reason: `Only ${available.length} players available (need at least 4)`, blockingConstraints: ['Insufficient available players'], shouldWait: true };
+      return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Insufficient available players'], shouldWait: true };
     }
 
     const maxAttempts = Math.min(available.length, 30);
@@ -102,6 +102,7 @@ export class SchedulingService {
 
       const playerIds: [string, string, string, string] = [team1[0].id, team1[1].id, team2[0].id, team2[1].id];
       const game = createGame(eventId, courtId, playerIds);
+      game.gameNumber = event.nextGameNumber++;
 
       const allPlayers = [...team1, ...team2];
       for (const p of allPlayers) {
@@ -112,7 +113,7 @@ export class SchedulingService {
       return { success: true, game };
     }
 
-    return { success: false, reason: 'No valid partner/opponent combination found', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
+      return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
   }
 
   startGame(eventId: string, gameId: string): ScheduleResult {

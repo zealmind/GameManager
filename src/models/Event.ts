@@ -12,7 +12,9 @@ export class Event {
   courts: number;
   totalGamesToPlay: number;
   gameHistory: Game[]; // completed games
+  nextGameNumber: number;
   startedAt?: Date;
+  endedAt?: Date;
 
   constructor(name: string, totalGamesToPlay: number, numCourts: number) {
     this.id = randomUUID();
@@ -23,10 +25,15 @@ export class Event {
     this.courts = numCourts;
     this.totalGamesToPlay = totalGamesToPlay;
     this.gameHistory = []; // completed games
+    this.nextGameNumber = 1;
   }
 
   isStarted(): boolean {
     return !!this.startedAt;
+  }
+
+  isEnded(): boolean {
+    return !!this.endedAt;
   }
 
   start(): void {
@@ -87,49 +94,19 @@ export class Event {
   }
 
   // Calculate initial target games for a new player
-  // Each player should get at least 6 games; remaining games distributed
+  // Each player should get at least totalGamesToPlay games
   private calculateInitialTargetGames(): number {
-    const playerCount = Math.max(this.players.size, 1);
-    const baseTarget = Math.floor(this.totalGamesToPlay / playerCount);
-    return Math.max(baseTarget, 6); // minimum 6 games per player
+    return this.totalGamesToPlay;
   }
 
   // Recalculate target games for all players based on current registration count
-  // This implements dynamic adjustment when availability changes
+  // Each available player should get at least totalGamesToPlay games
   recalculateTargetGames(): void {
-    const playerCount = this.players.size;
-    if (playerCount === 0) return;
-    
-    const totalTargetGames = this.totalGamesToPlay;
-    const minGamesPerPlayer = 6;
-    
-    // Calculate how many players can get the minimum, and how many extra games to distribute
     const availablePlayers = Array.from(this.registrations.values()).filter(r => !['UNAVAILABLE', 'AWAY', 'RETIRED'].includes(r.status));
-    const availableCount = availablePlayers.length;
     
-    if (availableCount === 0) return;
-    
-    const minTotal = availableCount * minGamesPerPlayer;
-    
-    if (totalTargetGames <= minTotal) {
-      // Not enough games for everyone to get 6, distribute equally
-      const baseTarget = Math.floor(totalTargetGames / availableCount);
-      const remainder = totalTargetGames % availableCount;
-      availablePlayers.forEach((reg, index) => {
-        const target = baseTarget + (index < remainder ? 1 : 0);
-        this.updateRegistration(reg.playerId, { targetGames: target });
-      });
-    } else {
-      // Everyone gets at least 6, distribute remaining games
-      const remainingGames = totalTargetGames - minTotal;
-      const extraPerPlayer = Math.floor(remainingGames / availableCount);
-      const extraRemainder = remainingGames % availableCount;
-      
-      availablePlayers.forEach((reg, index) => {
-        const target = minGamesPerPlayer + extraPerPlayer + (index < extraRemainder ? 1 : 0);
-        this.updateRegistration(reg.playerId, { targetGames: target });
-      });
-    }
+    availablePlayers.forEach(reg => {
+      this.updateRegistration(reg.playerId, { targetGames: this.totalGamesToPlay });
+    });
   }
 
   // Helper methods for scheduling logic
@@ -166,10 +143,7 @@ export class Event {
       });
   }
 
-  // Check if event is complete
   isComplete(): boolean {
-    // Event completes when total games played reaches target AND distribution is as fair as possible
-    // For simplicity, we consider complete when we've played totalGamesToPlay games
-    return this.gameHistory.length >= this.totalGamesToPlay;
+    return this.isEnded();
   }
 }

@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 export interface Game {
   id: string; // UUID
   eventId: string; // UUID
+  gameNumber: number;
   courtId: number;
   players: {
     team1: [string, string]; // player IDs
@@ -24,6 +25,7 @@ export function createGame(
   return {
     id: randomUUID(),
     eventId,
+    gameNumber: 0,
     courtId,
     players: {
       team1: [players[0], players[1]],

@@ -1,4 +1,4 @@
-export type PlayerStatus = 'WAITING' | 'PLAYING' | 'UNAVAILABLE' | 'AWAY' | 'RETIRED';
+export type PlayerStatus = 'WAITING' | 'PLAYING' | 'UNAVAILABLE' | 'AWAY' | 'RETIRED' | 'FULLFILLED';
 
 export interface EventPlayerRegistration {
   eventId: string;
