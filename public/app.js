@@ -5,6 +5,7 @@ let currentCompletedGamesFilter = '';
 let currentUser = null;
 let accessMode = null; // null | 'viewer' | 'moderator'
 let accessToken = null;
+let eventDetailPollInterval = null;
 
 const app = document.getElementById('main-content');
 const navBtns = document.querySelectorAll('.nav-btn');
@@ -123,6 +124,10 @@ async function api(url, options = {}) {
 
 function switchView(view) {
     navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    if (eventDetailPollInterval) {
+        clearInterval(eventDetailPollInterval);
+        eventDetailPollInterval = null;
+    }
     currentEventId = null;
     if (view === 'dashboard') {
         renderDashboard();
@@ -633,9 +638,15 @@ async function openEventDetail(eventId, fromShare = false) {
     `;
     document.getElementById('back-btn').addEventListener('click', () => switchView('dashboard'));
     await loadEventDetail(eventId);
+
+    // Auto-refresh event details every 5 seconds
+    if (eventDetailPollInterval) clearInterval(eventDetailPollInterval);
+    eventDetailPollInterval = setInterval(() => {
+        if (currentEventId) loadEventDetail(currentEventId);
+    }, 5000);
 }
 
-async function loadEventDetail(eventId) {
+async function loadEventDetail(eventId, fromShare = false) {
     try {
         const [event, status] = await Promise.all([
             api(`${API_BASE}/events/${eventId}`),
@@ -668,7 +679,7 @@ async function loadEventDetail(eventId) {
         if (!status.isStarted) {
             phaseHtml = renderRegistrationPhase(event, status);
         } else {
-            phaseHtml = renderGamePhase(event, status, activeGames, completedGames);
+            phaseHtml = renderGamePhase(event, status, activeGames, completedGames, fromShare);
         }
 
         container.innerHTML = phaseHtml;
@@ -743,7 +754,7 @@ function renderRegistrationPhase(event, status) {
     `;
 }
 
-function renderGamePhase(event, status, activeGames, completedGames) {
+function renderGamePhase(event, status, activeGames, completedGames, fromShare = false) {
     const maxCourt = event.courts || 1;
     const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
     let courtsHtml = '';
@@ -762,7 +773,7 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     ` : ''}
                 </div>
             </div>
-            <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
+            ${deadlockError ? `<div class="court-msg" style="display: block">${deadlockError}</div>` : `<div class="court-msg" style="display: none">${deadlockError}</div>`};
         if (court.game && !court.game.started) {
             const g = court.game;
             const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
@@ -776,7 +787,6 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                     </div>
                     <button class="btn btn-success btn-sm start-game-btn mt-1" data-game-id="${g.id}">Start Game</button>
                 </div>
-                <button class="btn btn-secondary btn-sm cancel-allot-btn mt-1" data-court-id="${court.courtId}">Cancel Allotment</button>
             `;
         } else if (court.game && court.game.started) {
             const g = court.game;
@@ -796,10 +806,75 @@ function renderGamePhase(event, status, activeGames, completedGames) {
                             <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
                         </div>
                          <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
-            </div>
-        </div>
+                    </div>
+                </div>
             `;
         }
+        courtsHtml += `</div>`;
+    });
+    
+    return `
+        <div class="card">
+            <div class="card-title" style="font-size:16px;">Leaderboard</div>
+            <div id="leaderboard-list">
+                ${renderLeaderboard(status, completedGames)}
+            </div>
+        </div>
+        
+        ${!status.isEnded && !fromShare ? `
+        <div class="card">
+            <div class="card-subtitle mb-2">Game Field</div>
+            ${courtsHtml}
+        </div>
+        ` : ''}
+        
+        ${!status.isEnded ? `
+        <div class="card">
+            <div class="flex justify-between items-center mb-2">
+                <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
+                <select id="completed-games-player-filter" class="player-filter-select">
+                    <option value="">All Players</option>
+                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''); })()}
+                </select>
+            </div>
+            <div id="completed-games-list">
+                ${completedGames.length ? completedGames.filter(g => {
+                    if (!currentCompletedGamesFilter) return true;
+                    return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
+                }).map(g => `
+                <div class="game-card completed-game-card" data-game-id="${g.id}">
+                    <div class="game-teams">
+                        <div class="game-team">Team 1: ${g.players.team1.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
+                        <div class="game-team">Team 2: ${g.players.team2.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
+                        <div class="game-status status-completed">Game #${g.gameNumber}</div>
+                        <div class="game-meta">
+                            court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : ''}
+                            ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : ''}
+                            ${g.startedAt && g.completedAt ? ` | Duration: ${formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())}` : ''}
+                        </div>
+                    </div>
+                    <div class="game-score-side">
+                        <div class="game-score-row" data-game-id="${g.id}">
+                            <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
+                            <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
+                        </div>
+                        <div class="game-score-edit hidden" data-game-id="${g.id}">
+                            <div class="score-input-group">
+                                <input type="number" class="score-input" data-game-id="${g.id}" data-team="1" value="${g.scores ? g.scores[0] : 0}" min="0">
+                                <span class="score-vs">-</span>
+                                <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
+                            </div>
+                            <button class="btn btn-success btn-sm mt-2 save-score-btn" data-game-id="${g.id}">Save</button>
+                            <button class="btn btn-secondary btn-sm mt-2 cancel-score-btn" data-game-id="${g.id}">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+                `).join('') : '<div class="text-muted">No completed games yet</div>'}
+            </div>
+        </div>
+        ` : ''}
+    `;
+}
         courtsHtml += `</div>`;
     });
 
