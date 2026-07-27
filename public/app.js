@@ -6,6 +6,15 @@ let currentUser = null;
 let accessMode = null; // null | 'viewer' | 'moderator'
 let accessToken = null;
 let eventDetailPollInterval = null;
+const localGameScores = new Map();
+
+function getGameLocalScore(gameId, teamIndex) {
+    const entry = localGameScores.get(gameId);
+    if (entry !== undefined) {
+        return teamIndex === 0 ? entry.team1 : entry.team2;
+    }
+    return null;
+}
 
 const app = document.getElementById('main-content');
 const navBtns = document.querySelectorAll('.nav-btn');
@@ -682,7 +691,68 @@ async function loadEventDetail(eventId, fromShare = false) {
             phaseHtml = renderGamePhase(event, status, activeGames, completedGames, fromShare);
         }
 
+        const activeEl = document.activeElement;
+        let preservedInput = null;
+        if (activeEl && activeEl.closest('#event-detail') && activeEl.classList.contains('score-input')) {
+            preservedInput = {
+                gameId: activeEl.getAttribute('data-game-id'),
+                team: activeEl.getAttribute('data-team'),
+                value: activeEl.value
+            };
+        }
+
         container.innerHTML = phaseHtml;
+
+        if (preservedInput) {
+            const input = container.querySelector(`.score-input[data-game-id="${preservedInput.gameId}"][data-team="${preservedInput.team}"]`);
+            if (input) {
+                const serverScores = (event.games || []).concat(event.gameHistory || []);
+                const game = serverScores.find(g => g.id === preservedInput.gameId);
+                const serverValue = game?.scores?.[parseInt(preservedInput.team) - 1];
+                const renderedValue = (serverValue !== undefined && serverValue !== null) ? String(serverValue) : '0';
+                if (preservedInput.value !== renderedValue) {
+                    input.value = preservedInput.value;
+                }
+                try { input.focus(); } catch {}
+                if (input.type !== 'number') {
+                    try { input.setSelectionRange(input.value.length, input.value.length); } catch {}
+                }
+            }
+        }
+
+        const playersList = document.getElementById('players-list');
+        const playersToggle = document.getElementById('players-toggle');
+        if (playersList && playersToggle) {
+            const storageKey = `gm_event_${eventId}_players_collapsed`;
+            const stored = localStorage.getItem(storageKey);
+            if (stored !== null) {
+                const shouldCollapse = stored === 'true';
+                if (shouldCollapse) {
+                    playersList.classList.add('players-section-collapsed');
+                } else {
+                    playersList.classList.remove('players-section-collapsed');
+                }
+                playersToggle.innerHTML = `Players ${shouldCollapse ? '&#9662;' : '&#9652;'}`;
+            }
+        }
+
+        const completedGamesList = document.getElementById('completed-games-list');
+        const completedGamesToggle = document.getElementById('completed-games-toggle');
+        if (completedGamesList && completedGamesToggle) {
+            const storageKey = `gm_event_${eventId}_gamestats_collapsed`;
+            const stored = localStorage.getItem(storageKey);
+            if (stored !== null) {
+                const shouldCollapse = stored === 'true';
+                if (shouldCollapse) {
+                    completedGamesList.classList.add('completed-games-collapsed');
+                } else {
+                    completedGamesList.classList.remove('completed-games-collapsed');
+                }
+                completedGamesToggle.innerHTML = `Game Stats ${shouldCollapse ? '&#9662;' : '&#9652;'}`;
+            } else if (!status.isEnded) {
+                completedGamesList.classList.add('completed-games-collapsed');
+            }
+        }
 
         if (status.isStarted && !status.isEnded && accessMode !== 'moderator') {
             const endBtn = document.createElement('div');
@@ -773,7 +843,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     ` : ''}
                 </div>
             </div>
-            ${deadlockError ? `<div class="court-msg" style="display: block">${deadlockError}</div>` : `<div class="court-msg" style="display: none">${deadlockError}</div>`};
+            <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
         if (court.game && !court.game.started) {
             const g = court.game;
             const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
@@ -801,9 +871,9 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     </div>
                     <div class="court-scores">
                         <div class="score-input-group">
-                            <input type="number" class="score-input" data-game-id="${g.id}" data-team="1" value="${g.scores ? g.scores[0] : 0}" min="0">
+                            <input type="number" class="score-input" data-game-id="${g.id}" data-team="1" value="${(() => { const local = getGameLocalScore(g.id, 0); return local !== null ? local : (g.scores ? g.scores[0] : 0); })()}" min="0">
                             <span class="score-vs">-</span>
-                            <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
+                            <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${(() => { const local = getGameLocalScore(g.id, 1); return local !== null ? local : (g.scores ? g.scores[1] : 0); })()}" min="0">
                         </div>
                          <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
                     </div>
@@ -813,71 +883,6 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         courtsHtml += `</div>`;
     });
     
-    return `
-        <div class="card">
-            <div class="card-title" style="font-size:16px;">Leaderboard</div>
-            <div id="leaderboard-list">
-                ${renderLeaderboard(status, completedGames)}
-            </div>
-        </div>
-        
-        ${!status.isEnded && !fromShare ? `
-        <div class="card">
-            <div class="card-subtitle mb-2">Game Field</div>
-            ${courtsHtml}
-        </div>
-        ` : ''}
-        
-        ${!status.isEnded ? `
-        <div class="card">
-            <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
-                <select id="completed-games-player-filter" class="player-filter-select">
-                    <option value="">All Players</option>
-                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''); })()}
-                </select>
-            </div>
-            <div id="completed-games-list">
-                ${completedGames.length ? completedGames.filter(g => {
-                    if (!currentCompletedGamesFilter) return true;
-                    return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
-                }).map(g => `
-                <div class="game-card completed-game-card" data-game-id="${g.id}">
-                    <div class="game-teams">
-                        <div class="game-team">Team 1: ${g.players.team1.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
-                        <div class="game-team">Team 2: ${g.players.team2.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
-                        <div class="game-status status-completed">Game #${g.gameNumber}</div>
-                        <div class="game-meta">
-                            court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : ''}
-                            ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}` : ''}
-                            ${g.startedAt && g.completedAt ? ` | Duration: ${formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())}` : ''}
-                        </div>
-                    </div>
-                    <div class="game-score-side">
-                        <div class="game-score-row" data-game-id="${g.id}">
-                            <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
-                            <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
-                        </div>
-                        <div class="game-score-edit hidden" data-game-id="${g.id}">
-                            <div class="score-input-group">
-                                <input type="number" class="score-input" data-game-id="${g.id}" data-team="1" value="${g.scores ? g.scores[0] : 0}" min="0">
-                                <span class="score-vs">-</span>
-                                <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${g.scores ? g.scores[1] : 0}" min="0">
-                            </div>
-                            <button class="btn btn-success btn-sm mt-2 save-score-btn" data-game-id="${g.id}">Save</button>
-                            <button class="btn btn-secondary btn-sm mt-2 cancel-score-btn" data-game-id="${g.id}">Cancel</button>
-                        </div>
-                    </div>
-                </div>
-                `).join('') : '<div class="text-muted">No completed games yet</div>'}
-            </div>
-        </div>
-        ` : ''}
-    `;
-}
-        courtsHtml += `</div>`;
-    });
-
     const waiting = status.players.filter(p => p.status === 'WAITING');
     const playing = status.players.filter(p => p.status === 'PLAYING');
     const away = status.players.filter(p => p.status === 'AWAY');
@@ -912,7 +917,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             </div>
         </div>
 
-        ${!status.isEnded ? `
+        ${!status.isEnded && !fromShare ? `
         <div class="card">
             <div class="card-subtitle mb-2">Game Field</div>
             ${courtsHtml}
@@ -1237,10 +1242,39 @@ function bindEventDetailActions(eventId, event, status) {
                         method: 'POST',
                         body: JSON.stringify({ score_team1: score1, score_team2: score2 })
                     });
+                    localGameScores.delete(gameId);
                     showToast('Game ended!');
                     loadEventDetail(eventId);
                 } catch (err) {
                     showToast(err.message);
+                }
+            });
+        });
+
+        container.querySelectorAll('.court-scores .score-input').forEach(input => {
+            input.addEventListener('input', () => {
+                const gameId = input.getAttribute('data-game-id');
+                const team = parseInt(input.getAttribute('data-team'));
+                const existing = localGameScores.get(gameId) || {};
+                if (team === 1) existing.team1 = parseInt(input.value) || 0;
+                else existing.team2 = parseInt(input.value) || 0;
+                localGameScores.set(gameId, existing);
+            });
+            input.addEventListener('blur', async () => {
+                const gameId = input.getAttribute('data-game-id');
+                const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
+                const inputs = card.querySelectorAll('.score-input');
+                const score1 = parseInt(inputs[0].value) || 0;
+                const score2 = parseInt(inputs[1].value) || 0;
+                localGameScores.set(gameId, { team1: score1, team2: score2 });
+                try {
+                    await api(`${API_BASE}/events/${eventId}/games/${gameId}/score`, {
+                        method: 'POST',
+                        body: JSON.stringify({ score_team1: score1, score_team2: score2 })
+                    });
+                    localGameScores.delete(gameId);
+                } catch (err) {
+                    // ignore auto-save errors silently
                 }
             });
         });
@@ -1286,6 +1320,7 @@ function bindEventDetailActions(eventId, event, status) {
                     method: 'POST',
                     body: JSON.stringify({ score_team1: score1, score_team2: score2 })
                 });
+                localGameScores.delete(gameId);
                 showToast('Score updated');
                 loadEventDetail(eventId);
             } catch (err) {
@@ -1298,6 +1333,7 @@ function bindEventDetailActions(eventId, event, status) {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const gameId = btn.dataset.gameId;
+            localGameScores.delete(gameId);
             container.querySelectorAll(`.game-score-row[data-game-id="${gameId}"]`).forEach(el => el.classList.remove('hidden'));
             container.querySelectorAll(`.game-score-edit[data-game-id="${gameId}"]`).forEach(el => el.classList.add('hidden'));
         });
@@ -1306,12 +1342,10 @@ function bindEventDetailActions(eventId, event, status) {
     const completedGamesList = document.getElementById('completed-games-list');
     const completedGamesToggle = document.getElementById('completed-games-toggle');
     if (completedGamesList && completedGamesToggle) {
-        if (!status.isEnded) {
-            completedGamesList.classList.add('completed-games-collapsed');
-        }
         completedGamesToggle.addEventListener('click', () => {
             const isCollapsed = completedGamesList.classList.toggle('completed-games-collapsed');
             completedGamesToggle.innerHTML = `Game Stats ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+            localStorage.setItem(`gm_event_${eventId}_gamestats_collapsed`, String(isCollapsed));
         });
     }
 
@@ -1329,6 +1363,7 @@ function bindEventDetailActions(eventId, event, status) {
         playersToggle.addEventListener('click', () => {
             const isCollapsed = playersList.classList.toggle('players-section-collapsed');
             playersToggle.innerHTML = `Players ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+            localStorage.setItem(`gm_event_${eventId}_players_collapsed`, String(isCollapsed));
         });
     }
 }
