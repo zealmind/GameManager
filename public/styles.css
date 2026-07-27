@@ -1067,3 +1067,51 @@ html, body {
     border-radius: var(--radius);
     margin-bottom: 6px;
 }
+
+.played-with-matrix-container {
+    overflow-x: auto;
+}
+
+.played-with-matrix {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12px;
+}
+
+.played-with-matrix th,
+.played-with-matrix td {
+    border: 1px solid var(--border);
+    padding: 4px 8px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.played-with-matrix th {
+    background: var(--card-bg);
+    font-weight: 600;
+    font-size: 11px;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+}
+
+.played-with-matrix thead th:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+}
+
+.played-with-matrix tbody th {
+    background: var(--card-bg);
+    font-weight: 600;
+    font-size: 11px;
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    text-align: left;
+}
+
+.played-with-matrix td.played-with-self {
+    color: var(--text-muted);
+    font-style: italic;
+}
