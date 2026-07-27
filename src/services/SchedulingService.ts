@@ -329,6 +329,11 @@ const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
     if (game.completed) return { success: false, reason: 'Game already completed' };
     if (game.started) return { success: false, reason: 'Game has already started' };
     if (game.players.team1.length !== 2 || game.players.team2.length !== 2) {
+      for (const pid of [...game.players.team1, ...game.players.team2]) {
+        const reg = event.getRegistration(pid);
+        if (reg) reg.status = 'WAITING';
+      }
+      event.games = event.games.filter(g => g.id !== gameId);
       return { success: false, reason: 'Both teams must have exactly 2 players to start the game', blockingConstraints: ['Team size must be 2v2'] };
     }
     game.gameNumber = event.nextGameNumber++;

@@ -875,8 +875,10 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                             <span class="score-vs">-</span>
                             <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${(() => { const local = getGameLocalScore(g.id, 1); return local !== null ? local : (g.scores ? g.scores[1] : 0); })()}" min="0">
                         </div>
-                         <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
-                         <button class="btn btn-danger btn-sm mt-1 cancel-game-btn" data-game-id="${g.id}">Cancel Game</button>
+                         <div style="display:flex; flex-direction:row; gap:6px; margin-top:4px;">
+                             <button class="btn btn-success btn-sm end-game-btn" data-game-id="${g.id}">End Game</button>
+                             <button class="btn btn-danger btn-sm cancel-game-btn" data-game-id="${g.id}">Cancel Game</button>
+                         </div>
                     </div>
                 </div>
             `;
@@ -1262,6 +1264,7 @@ function bindEventDetailActions(eventId, event, status) {
                     showToast('Cannot determine court for this game');
                     return;
                 }
+                if (!confirm('Cancel this game? Players will be returned to waiting.')) return;
                 try {
                     await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
                     showToast('Game cancelled');

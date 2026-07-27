@@ -209,10 +209,10 @@ router.post('/:eventId/games/:gameId/start', withEventAccess as any, loadEvent a
       return res.status(403).json({ error: 'Forbidden' });
     }
     const result = schedulingService.startGame(req.params.eventId as string, req.params.gameId as string);
+    await db.persist();
     if (!result.success) {
       return res.status(400).json({ error: result.reason });
     }
-    await db.persist();
     res.json(result.game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

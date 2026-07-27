@@ -194,10 +194,10 @@ router.post('/:eventId/games/:gameId/start', eventAccess_1.withEventAccess, even
             return res.status(403).json({ error: 'Forbidden' });
         }
         const result = schedulingService.startGame(req.params.eventId, req.params.gameId);
+        await db.persist();
         if (!result.success) {
             return res.status(400).json({ error: result.reason });
         }
-        await db.persist();
         res.json(result.game);
     }
     catch (err) {
