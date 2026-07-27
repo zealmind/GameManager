@@ -69,7 +69,9 @@ router.post('/:eventId/players', eventAccess_1.withEventAccess, eventAccess_1.lo
             if (!player) {
                 return res.status(404).json({ error: 'Player not found' });
             }
-            if (player.ownerId !== req.user?.id) {
+            const isOwner = req.user && player.ownerId === req.user.id;
+            const isModerator = req.shareAccess && req.shareAccess.permission === 'moderator';
+            if (!isOwner && !isModerator) {
                 return res.status(403).json({ error: 'Forbidden' });
             }
         }

@@ -863,7 +863,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
             const team2Names = g.team2.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
             courtsHtml += `
-                <div class="game-card court-game-card" data-game-id="${g.id}">
+                <div class="game-card court-game-card" data-game-id="${g.id}" data-court-id="${court.courtId}">
                     <div class="game-teams">
                         <div class="game-team">Team 1: ${team1Names}</div>
                         <div class="game-team">Team 2: ${team2Names}</div>
@@ -876,6 +876,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                             <input type="number" class="score-input" data-game-id="${g.id}" data-team="2" value="${(() => { const local = getGameLocalScore(g.id, 1); return local !== null ? local : (g.scores ? g.scores[1] : 0); })()}" min="0">
                         </div>
                          <button class="btn btn-success btn-sm mt-1 end-game-btn" data-game-id="${g.id}">End Game</button>
+                         <button class="btn btn-danger btn-sm mt-1 cancel-game-btn" data-game-id="${g.id}">Cancel Game</button>
                     </div>
                 </div>
             `;
@@ -1244,6 +1245,26 @@ function bindEventDetailActions(eventId, event, status) {
                     });
                     localGameScores.delete(gameId);
                     showToast('Game ended!');
+                    loadEventDetail(eventId);
+                } catch (err) {
+                    showToast(err.message);
+                }
+            });
+        });
+
+        container.querySelectorAll('.cancel-game-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const gameId = btn.dataset.gameId;
+                const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
+                const courtId = card ? card.dataset.courtId : null;
+                if (!courtId) {
+                    showToast('Cannot determine court for this game');
+                    return;
+                }
+                try {
+                    await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
+                    showToast('Game cancelled');
                     loadEventDetail(eventId);
                 } catch (err) {
                     showToast(err.message);

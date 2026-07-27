@@ -301,6 +301,26 @@ const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
     return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
   }
 
+  cancelGame(eventId: string, gameId: string): ScheduleResult {
+    const event = this.db.getEvent(eventId);
+    if (!event) return { success: false, reason: 'Event not found' };
+    const gameIndex = event.games.findIndex(g => g.id === gameId);
+    if (gameIndex === -1) return { success: false, reason: 'Game not found' };
+    const game = event.games[gameIndex];
+    if (game.completed) return { success: false, reason: 'Game already completed' };
+
+    const allPlayerIds = [...game.players.team1, ...game.players.team2];
+    for (const pid of allPlayerIds) {
+      const reg = event.getRegistration(pid);
+      if (reg) {
+        reg.status = 'WAITING';
+      }
+    }
+
+    event.games.splice(gameIndex, 1);
+    return { success: true, game };
+  }
+
   startGame(eventId: string, gameId: string): ScheduleResult {
     const event = this.db.getEvent(eventId);
     if (!event) return { success: false, reason: 'Event not found' };
@@ -308,6 +328,9 @@ const game = createGame(eventId, courtId, finalTeam1, finalTeam2);
     if (!game) return { success: false, reason: 'Game not found' };
     if (game.completed) return { success: false, reason: 'Game already completed' };
     if (game.started) return { success: false, reason: 'Game has already started' };
+    if (game.players.team1.length !== 2 || game.players.team2.length !== 2) {
+      return { success: false, reason: 'Both teams must have exactly 2 players to start the game', blockingConstraints: ['Team size must be 2v2'] };
+    }
     game.gameNumber = event.nextGameNumber++;
     game.started = true;
     game.startedAt = new Date();

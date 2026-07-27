@@ -29,14 +29,12 @@ router.delete('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEve
     if (!active) {
       return res.status(404).json({ error: 'No active allotment on this court' });
     }
-    if (active.started) {
-      return res.status(400).json({ error: 'Cannot cancel after game has started' });
+
+    const result = schedulingService.cancelGame(req.params.eventId as string, active.id);
+    if (!result.success) {
+      return res.status(400).json({ error: result.reason });
     }
-    for (const pid of [...active.players.team1, ...active.players.team2]) {
-      const reg = event.getRegistration(pid);
-      if (reg) reg.status = 'WAITING';
-    }
-    event.games = event.games.filter((g: Game) => !(!g.completed && g.courtId === courtId));
+
     await db.persist();
     res.json({ success: true });
   } catch (err) {

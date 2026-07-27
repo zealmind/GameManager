@@ -15,6 +15,7 @@ export declare class SchedulingService {
     hasPlayedTogether(player1Id: string, player2Id: string, event: Event): boolean;
     assignNextGame(eventId: string, courtId: number): ScheduleResult;
     completePartialGame(eventId: string, courtId: number, team1: string[], team2: string[]): ScheduleResult;
+    cancelGame(eventId: string, gameId: string): ScheduleResult;
     startGame(eventId: string, gameId: string): ScheduleResult;
     endGame(eventId: string, gameId: string, scores?: {
         score_team1?: number;

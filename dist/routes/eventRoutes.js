@@ -3,55 +3,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const Database_1 = require("../storage/Database");
 const auth_1 = require("../middleware/auth");
+const eventAccess_1 = require("../middleware/eventAccess");
 const router = (0, express_1.Router)();
 const db = Database_1.Database.getInstance();
-function withAccess(req, res, next) {
-    const authHeader = req.headers.authorization;
-    const token = authHeader?.startsWith('Bearer ')
-        ? authHeader.slice(7)
-        : req.cookies?.token;
-    if (token) {
-        return (0, auth_1.authenticate)(req, res, next);
-    }
-    const share = req.headers['x-share-token'];
-    if (typeof share === 'string') {
-        const access = db.resolveShareToken(share);
-        if (access) {
-            req.shareAccess = access;
-            return next();
-        }
-    }
-    return res.status(401).json({ error: 'Unauthorized' });
-}
-function requireOwner(req, res, next) {
-    const event = db.getEvent(req.params.eventId);
-    if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-    }
-    if (event.ownerId !== req.user?.id) {
-        return res.status(403).json({ error: 'Forbidden' });
-    }
-    req.event = event;
-    next();
-}
-function requireOwnerOrModerator(req, res, next) {
-    const event = db.getEvent(req.params.eventId);
-    if (!event) {
-        return res.status(404).json({ error: 'Event not found' });
-    }
-    const user = req.user;
-    const shareAccess = req.shareAccess;
-    if (user && event.ownerId === user.id) {
-        req.event = event;
-        return next();
-    }
-    if (shareAccess && shareAccess.eventId === event.id) {
-        req.event = event;
-        req.sharePermission = shareAccess.permission;
-        return next();
-    }
-    return res.status(403).json({ error: 'Forbidden' });
-}
 function prepareEventResponse(event) {
     const ev = event;
     return {
@@ -105,7 +59,7 @@ router.get('/shared', auth_1.authenticate, (req, res) => {
     }
 });
 // GET /events/:eventId - Get event details (owner or share token)
-router.get('/:eventId', withAccess, async (req, res) => {
+router.get('/:eventId', eventAccess_1.withEventAccess, async (req, res) => {
     try {
         const event = db.getEvent(req.params.eventId);
         if (!event) {
@@ -125,7 +79,25 @@ router.get('/:eventId', withAccess, async (req, res) => {
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// DELETE /events/:eventId - Delete an event (owner only, and no shared access)
+// DELETE /events/:eventId/share - Revoke all share tokens (owner only)
+router.delete('/:eventId/share', auth_1.authenticate, async (req, res) => {
+    try {
+        const event = db.getEvent(req.params.eventId);
+        if (!event) {
+            return res.status(404).json({ error: 'Event not found' });
+        }
+        if (event.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        event.sharedAccess = [];
+        await db.persist();
+        res.json({ success: true });
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// DELETE /events/:eventId - Delete an event (owner only)
 router.delete('/:eventId', auth_1.authenticate, async (req, res) => {
     try {
         const event = db.getEvent(req.params.eventId);
@@ -135,9 +107,6 @@ router.delete('/:eventId', auth_1.authenticate, async (req, res) => {
         if (event.ownerId !== req.user.id) {
             return res.status(403).json({ error: 'Forbidden' });
         }
-        if ((event.sharedAccess || []).length > 0) {
-            return res.status(400).json({ error: 'Cannot delete an event that has been shared' });
-        }
         await db.deleteEvent(req.params.eventId);
         res.json({ success: true });
     }
@@ -146,7 +115,7 @@ router.delete('/:eventId', auth_1.authenticate, async (req, res) => {
     }
 });
 // POST /events/:eventId/start - Start an event (owner or moderator)
-router.post('/:eventId/start', withAccess, async (req, res) => {
+router.post('/:eventId/start', eventAccess_1.withEventAccess, async (req, res) => {
     try {
         const event = db.getEvent(req.params.eventId);
         if (!event) {
@@ -204,14 +173,18 @@ router.post('/:eventId/invite-moderator', auth_1.authenticate, async (req, res) 
         res.status(500).json({ error: 'Internal server error' });
     }
 });
-// DELETE /events/:eventId/players/:playerId - Unregister a player from an event (pre-start only, owner only)
-router.delete('/:eventId/players/:playerId', auth_1.authenticate, async (req, res) => {
+// DELETE /events/:eventId/players/:playerId - Unregister a player from an event (pre-start only, owner or moderator)
+router.delete('/:eventId/players/:playerId', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
-        const event = db.getEvent(req.params.eventId);
+        const event = req.event;
         if (!event) {
             return res.status(404).json({ error: 'Event not found' });
         }
-        if (event.ownerId !== req.user.id) {
+        const user = req.user;
+        const shareAccess = req.shareAccess;
+        const isOwner = user && event.ownerId === user.id;
+        const isModerator = shareAccess && shareAccess.eventId === event.id && shareAccess.permission === 'moderator';
+        if (!isOwner && !isModerator) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         if (event.isStarted()) {

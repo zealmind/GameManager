@@ -29,15 +29,10 @@ router.delete('/:eventId/courts/:courtId/allot', eventAccess_1.withEventAccess, 
         if (!active) {
             return res.status(404).json({ error: 'No active allotment on this court' });
         }
-        if (active.started) {
-            return res.status(400).json({ error: 'Cannot cancel after game has started' });
+        const result = schedulingService.cancelGame(req.params.eventId, active.id);
+        if (!result.success) {
+            return res.status(400).json({ error: result.reason });
         }
-        for (const pid of [...active.players.team1, ...active.players.team2]) {
-            const reg = event.getRegistration(pid);
-            if (reg)
-                reg.status = 'WAITING';
-        }
-        event.games = event.games.filter((g) => !(!g.completed && g.courtId === courtId));
         await db.persist();
         res.json({ success: true });
     }
@@ -77,7 +72,11 @@ router.post('/:eventId/schedule', eventAccess_1.withEventAccess, eventAccess_1.l
 router.post('/:eventId/end', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
         const event = req.event;
-        if (!isOwnerOrModerator(event, req)) {
+        const user = req.user;
+        const shareAccess = req.shareAccess;
+        const isOwner = user && event.ownerId === user.id;
+        const isModerator = shareAccess && shareAccess.eventId === event.id && shareAccess.permission === 'moderator';
+        if (!isOwner) {
             return res.status(403).json({ error: 'Forbidden' });
         }
         if (!event.isStarted()) {
