@@ -985,13 +985,12 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                 `).join('') : '<div class="text-muted">No completed games yet</div>'}
              </div>
          </div>
-
-         ${renderPlayedWithCard(status)}
+         ${renderPlayedWithCard(event)}
      `;
 }
 
-function renderPlayedWithCard(status) {
-    const { playerIds, matrix, players } = computePlayedWithMatrix(status);
+function renderPlayedWithCard(event) {
+    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
     const nickNameMap = buildNickNameMap(players);
 
     if (playerIds.length === 0) {
@@ -1669,86 +1668,66 @@ function resolvePlayerName(playerId, status) {
     return playerId.slice(0, 8);
 }
 
-function computePlayedWithMatrix(status) {
-    const players = status.players || [];
-    const gameHistory = status.gameHistory || [];
-    
-    if (!players.length) {
-        return { playerIds: [], matrix: [], players: [] };
-    }
+function computePlayedWithMatrix(event) {
+      const players = event.players || [];
+      const gameHistory = event.gameHistory;
 
-    const nickNameMap = buildNickNameMap(players);
-    
-    const playerIds = players.map(p => p.id);
-    const indexMap = new Map();
-    playerIds.forEach((id, idx) => indexMap.set(id, idx));
+      if (!players.length) {
+          return { playerIds: [], matrix: [], players: [] };
+      }
+  
+      const nickNameMap = buildNickNameMap(players);
+      
+      const playerIds = players.map(p => p.id);
+      const indexMap = new Map();
+      playerIds.forEach((id, idx) => indexMap.set(id, idx));
+  
+      const n = playerIds.length;
+      const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+  
+      for (const game of gameHistory) {
+          const gamePlayers = [
+              ...(game.players?.team1 || []),
+              ...(game.players?.team2 || [])
+          ];
 
-    const n = playerIds.length;
-    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
-
-    for (const game of gameHistory) {
-        const team1 = game.players?.team1 || [];
-        const team2 = game.players?.team2 || [];
-
-        for (let i = 0; i < team1.length; i++) {
-            for (let j = i + 1; j < team1.length; j++) {
-                const idxA = indexMap.get(team1[i]);
-                const idxB = indexMap.get(team1[j]);
-                if (idxA !== undefined && idxB !== undefined) {
-                    matrix[idxA][idxB]++;
-                    matrix[idxB][idxA]++;
-                }
-            }
-        }
-
-        for (let i = 0; i < team2.length; i++) {
-            for (let j = i + 1; j < team2.length; j++) {
-                const idxA = indexMap.get(team2[i]);
-                const idxB = indexMap.get(team2[j]);
-                if (idxA !== undefined && idxB !== undefined) {
-                    matrix[idxA][idxB]++;
-                    matrix[idxB][idxA]++;
-                }
-            }
-        }
-
-        for (const p1 of team1) {
-            for (const p2 of team2) {
-                const idxA = indexMap.get(p1);
-                const idxB = indexMap.get(p2);
-                if (idxA !== undefined && idxB !== undefined) {
-                    matrix[idxA][idxB]++;
-                    matrix[idxB][idxA]++;
-                }
-            }
-        }
-    }
-
-    // Sort playerIds by nickname and reorder matrix
-    const sortedPlayerIds = [...playerIds].sort((a, b) => {
-        const nickA = nickNameMap.get(a) || '';
-        const nickB = nickNameMap.get(b) || '';
-        return nickA.localeCompare(nickB);
-    });
-
-    const sortedIndexMap = new Map();
-    sortedPlayerIds.forEach((id, idx) => sortedIndexMap.set(id, idx));
-
-    const sortedMatrix = Array.from({ length: n }, () => Array(n).fill(0));
-    for (let i = 0; i < n; i++) {
-        for (let j = 0; j < n; j++) {
-            const origIdI = playerIds[i];
-            const origIdJ = playerIds[j];
-            const newI = sortedIndexMap.get(origIdI);
-            const newJ = sortedIndexMap.get(origIdJ);
-            if (newI !== undefined && newJ !== undefined) {
-                sortedMatrix[newI][newJ] = matrix[i][j];
-            }
-        }
-    }
-
-    return { playerIds: sortedPlayerIds, matrix: sortedMatrix, players };
-}
+          for (const p of gamePlayers) {
+              const idxP = indexMap.get(p);
+              if (idxP === undefined) continue;
+              for (const q of gamePlayers) {
+                  if (p === q) continue;
+                  const idxQ = indexMap.get(q);
+                  if (idxQ === undefined) continue;
+                  matrix[idxP][idxQ]++;
+              }
+          }
+      }
+  
+      // Sort playerIds by nickname and reorder matrix
+      const sortedPlayerIds = [...playerIds].sort((a, b) => {
+          const nickA = nickNameMap.get(a) || '';
+          const nickB = nickNameMap.get(b) || '';
+          return nickA.localeCompare(nickB);
+      });
+  
+      const sortedIndexMap = new Map();
+      sortedPlayerIds.forEach((id, idx) => sortedIndexMap.set(id, idx));
+  
+      const sortedMatrix = Array.from({ length: n }, () => Array(n).fill(0));
+      for (let i = 0; i < n; i++) {
+          for (let j = 0; j < n; j++) {
+              const origIdI = playerIds[i];
+              const origIdJ = playerIds[j];
+              const newI = sortedIndexMap.get(origIdI);
+              const newJ = sortedIndexMap.get(origIdJ);
+              if (newI !== undefined && newJ !== undefined) {
+                  sortedMatrix[newI][newJ] = matrix[i][j];
+              }
+          }
+      }
+  
+      return { playerIds: sortedPlayerIds, matrix: sortedMatrix, players };
+  }
 
 function openManualAllotModal(eventId, courtId) {
     const overlay = document.createElement('div');
