@@ -266,8 +266,7 @@ function initWelcomeScreen() {
                     console.log('[welcome] share validation response:', res);
                     clearWelcomeError();
                     setAccessMode(accessMode, accessToken);
-                    screen.classList.remove('active');
-                    video.pause();
+                    dismissWelcomeScreen();
                     openEventDetail(res.eventId, true);
                 } catch (err) {
                     console.error('[welcome] share validation error:', err);
@@ -275,8 +274,7 @@ function initWelcomeScreen() {
                 }
             } else {
                 clearWelcomeError();
-                screen.classList.remove('active');
-                video.pause();
+                dismissWelcomeScreen();
                 switchView('dashboard');
             }
         } else {
@@ -335,7 +333,39 @@ async function checkAuthState() {
 function logout() {
     clearUser();
     clearAccessMode();
-    switchView('dashboard');
+    clearShareParamsFromUrl();
+    if (eventDetailPollInterval) {
+        clearInterval(eventDetailPollInterval);
+        eventDetailPollInterval = null;
+    }
+    currentEventId = null;
+    deadlockCourtErrors.clear();
+    localGameScores.clear();
+
+    const screen = document.getElementById('welcome-screen');
+    const video = document.getElementById('welcome-video');
+    const btn = document.getElementById('enter-btn');
+    if (screen) screen.classList.add('active');
+    if (video) {
+        video.currentTime = 0;
+        video.play().catch(() => {});
+    }
+    if (btn) {
+        btn.classList.remove('hidden');
+        btn.textContent = 'Login / Sign Up';
+    }
+    clearWelcomeError();
+    setDebug('Logged out');
+    if (app) app.innerHTML = '';
+    navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === 'dashboard'));
+    showToast('Logged out');
+}
+
+function dismissWelcomeScreen() {
+    const screen = document.getElementById('welcome-screen');
+    const video = document.getElementById('welcome-video');
+    if (screen) screen.classList.remove('active');
+    if (video) video.pause();
 }
 
 async function showLoginModal() {
@@ -417,6 +447,7 @@ async function showLoginModal() {
             localStorage.setItem('gm_token', res.token);
             setUser(res.user);
             closeLoginModal();
+            dismissWelcomeScreen();
             switchView('dashboard');
             showToast('Welcome back!');
         } catch (err) {
@@ -439,6 +470,7 @@ async function showLoginModal() {
             localStorage.setItem('gm_token', res.token);
             setUser(res.user);
             closeLoginModal();
+            dismissWelcomeScreen();
             switchView('dashboard');
             showToast('Account created!');
         } catch (err) {
@@ -1734,11 +1766,22 @@ function renderPlayers() {
     app.innerHTML = `
         <div class="flex justify-between items-center mb-2">
             <h2 class="card-title">Players</h2>
-            <button class="btn btn-primary btn-sm" id="create-player-btn">+ New</button>
+            <div class="header-actions">
+                <button class="btn btn-primary btn-sm" id="create-player-btn">+ New</button>
+                ${isLoggedIn() ? '<button class="btn btn-secondary btn-sm" id="logout-btn">Logout</button>' : ''}
+            </div>
         </div>
         <div id="players-list">Loading...</div>
     `;
     document.getElementById('create-player-btn').addEventListener('click', openCreatePlayerModal);
+    const logoutBtn = document.getElementById('logout-btn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', () => {
+            if (confirm('Logout? You will need to sign in again to access your events and players.')) {
+                logout();
+            }
+        });
+    }
     loadPlayersList();
 }
 

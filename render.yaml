@@ -7,6 +7,12 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # Must match Google/GitHub OAuth "Authorized redirect URI" host (the API)
+      - key: APP_URL
+        value: https://gamemanager-nrg2.onrender.com
+      # Vercel frontend origin — used after OAuth to send the user back
+      - key: FRONTEND_URL
+        value: https://gamemanager-frontend.vercel.app
       - key: TURSO_DATABASE_URL
         value: libsql://gamemanager-class-raja.aws-ap-south-1.turso.io
       - key: TURSO_AUTH_TOKEN

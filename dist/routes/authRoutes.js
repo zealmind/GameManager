@@ -12,7 +12,27 @@ const router = (0, express_1.Router)();
 const db = Database_1.Database.getInstance();
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const APP_URL = process.env.APP_URL || process.env.BASE_URL || 'http://localhost:4444';
+const FRONTEND_URL = process.env.FRONTEND_URL || APP_URL;
 const oauthStateStore = new Map();
+/** Always return users to the frontend origin after OAuth (needed for Vercel + Render split). */
+function buildPostAuthRedirect(redirectTo, token) {
+    let path = '/';
+    try {
+        if (redirectTo && /^https?:\/\//i.test(redirectTo)) {
+            const url = new URL(redirectTo);
+            path = `${url.pathname}${url.search}` || '/';
+        }
+        else if (redirectTo && redirectTo.startsWith('/')) {
+            path = redirectTo;
+        }
+    }
+    catch {
+        path = '/';
+    }
+    const target = new URL(path, FRONTEND_URL);
+    target.searchParams.set('token', token);
+    return target.toString();
+}
 function getClientIp(req) {
     return req.ip || req.connection?.remoteAddress || 'unknown';
 }
@@ -153,8 +173,7 @@ router.get('/github/callback', async (req, res) => {
             await db.client.execute('INSERT INTO users (id, email, name, provider, provider_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)', [userId, primaryEmail, userData.name || userData.login || 'GitHub User', 'github', String(userData.id), userData.avatar_url || null]);
         }
         const token = (0, auth_1.signJwt)(userId);
-        const redirectTo = stored.redirect || '/';
-        res.redirect(`${redirectTo}?token=${encodeURIComponent(token)}`);
+        res.redirect(buildPostAuthRedirect(stored.redirect, token));
     }
     catch (err) {
         console.error('GitHub callback error', err);
@@ -214,8 +233,7 @@ router.get('/google/callback', async (req, res) => {
             await db.client.execute('INSERT INTO users (id, email, name, provider, provider_id, avatar_url) VALUES (?, ?, ?, ?, ?, ?)', [userId, userData.email || `${userData.sub}@google.user`, userData.name || 'Google User', 'google', userData.sub, userData.picture || null]);
         }
         const token = (0, auth_1.signJwt)(userId);
-        const redirectTo = stored.redirect || '/';
-        res.redirect(`${redirectTo}?token=${encodeURIComponent(token)}`);
+        res.redirect(buildPostAuthRedirect(stored.redirect, token));
     }
     catch (err) {
         console.error('Google callback error', err);

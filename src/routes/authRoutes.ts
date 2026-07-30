@@ -8,8 +8,28 @@ const router = Router();
 const db = Database.getInstance();
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production';
 const APP_URL = process.env.APP_URL || process.env.BASE_URL || 'http://localhost:4444';
+const FRONTEND_URL = process.env.FRONTEND_URL || APP_URL;
 
 const oauthStateStore = new Map<string, { redirect?: string }>();
+
+/** Always return users to the frontend origin after OAuth (needed for Vercel + Render split). */
+function buildPostAuthRedirect(redirectTo: string | undefined, token: string): string {
+  let path = '/';
+  try {
+    if (redirectTo && /^https?:\/\//i.test(redirectTo)) {
+      const url = new URL(redirectTo);
+      path = `${url.pathname}${url.search}` || '/';
+    } else if (redirectTo && redirectTo.startsWith('/')) {
+      path = redirectTo;
+    }
+  } catch {
+    path = '/';
+  }
+
+  const target = new URL(path, FRONTEND_URL);
+  target.searchParams.set('token', token);
+  return target.toString();
+}
 
 function getClientIp(req: { ip?: string; connection?: { remoteAddress?: string } }) {
   return req.ip || req.connection?.remoteAddress || 'unknown';
@@ -184,8 +204,7 @@ router.get('/github/callback', async (req, res) => {
     }
 
     const token = signJwt(userId);
-    const redirectTo = stored.redirect || '/';
-    res.redirect(`${redirectTo}?token=${encodeURIComponent(token)}`);
+    res.redirect(buildPostAuthRedirect(stored.redirect, token));
   } catch (err) {
     console.error('GitHub callback error', err);
     res.status(500).send('OAuth failed');
@@ -257,8 +276,7 @@ router.get('/google/callback', async (req, res) => {
     }
 
     const token = signJwt(userId);
-    const redirectTo = stored.redirect || '/';
-    res.redirect(`${redirectTo}?token=${encodeURIComponent(token)}`);
+    res.redirect(buildPostAuthRedirect(stored.redirect, token));
   } catch (err) {
     console.error('Google callback error', err);
     res.status(500).send('OAuth failed');
