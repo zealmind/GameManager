@@ -780,6 +780,7 @@ async function loadEventDetail(eventId, fromShare = false) {
 
         bindEventDetailActions(eventId, event, status);
         bindCollapsibleSections(eventId, status);
+        bindPlayedWithExpand(event);
 
         const actionsEl = document.getElementById('event-actions');
         if (actionsEl && event.ownerId === (currentUser?.id || '')) {
@@ -1008,53 +1009,110 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
      `;
 }
 
-function renderPlayedWithCard(event) {
-    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = false } = {}) {
+    const playerMap = new Map(players.map(p => [p.id, p]));
     const nickNameMap = buildNickNameMap(players);
+    const indexMap = new Map(playerIds.map((id, i) => [id, i]));
 
-    if (playerIds.length === 0) {
-        return '';
-    }
-
-    // Sort player IDs by nickname for display order
-    const nicknameOrder = [...playerIds].sort((a, b) => {
+    // Always sort by nickname so compact and fullscreen matrix positions match
+    const order = [...playerIds].sort((a, b) => {
         const nickA = nickNameMap.get(a) || '';
         const nickB = nickNameMap.get(b) || '';
         return nickA.localeCompare(nickB);
     });
 
-    const headerCells = nicknameOrder.map(id => {
-        const nick = nickNameMap.get(id) || id.slice(0, 8);
-        return `<th>${escapeHtml(nick)}</th>`;
-    }).join('');
+    const getLabel = (id) => {
+        const player = playerMap.get(id);
+        if (useFullNames) {
+            return player?.name || id.slice(0, 8);
+        }
+        return nickNameMap.get(id) || id.slice(0, 8);
+    };
 
-    const rows = nicknameOrder.map((rowId, rowIdx) => {
-        const nick = nickNameMap.get(rowId) || rowId.slice(0, 8);
-        const cells = nicknameOrder.map((colId, colIdx) => {
-            const count = matrix[rowIdx][colIdx];
+    const headerCells = order.map(id =>
+        `<th class="played-with-col-header"><span class="played-with-col-label">${escapeHtml(getLabel(id))}</span></th>`
+    ).join('');
+    const rows = order.map(rowId => {
+        const cells = order.map(colId => {
+            const i = indexMap.get(rowId);
+            const j = indexMap.get(colId);
+            const count = matrix[i][j];
             const isDiagonal = rowId === colId;
             return `<td class="${isDiagonal ? 'played-with-self' : ''}">${isDiagonal ? '-' : count}</td>`;
         }).join('');
-        return `<tr><th>${escapeHtml(nick)}</th>${cells}</tr>`;
+        return `<tr><th class="played-with-row-header">${escapeHtml(getLabel(rowId))}</th>${cells}</tr>`;
     }).join('');
 
     return `
+        <table class="played-with-matrix${useFullNames ? ' played-with-matrix-names' : ''}">
+            <thead>
+                <tr><th></th>${headerCells}</tr>
+            </thead>
+            <tbody>
+                ${rows}
+            </tbody>
+        </table>
+    `;
+}
+
+function renderPlayedWithCard(event) {
+    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+
+    if (playerIds.length === 0) {
+        return '';
+    }
+
+    return `
         <div class="card">
-            <div class="card-title" style="font-size:16px; cursor:pointer;" id="played-with-toggle">Who Played with Who &#9662;</div>
+            <div class="played-with-header">
+                <div class="card-title" style="font-size:16px; cursor:pointer; margin:0; flex:1;" id="played-with-toggle">Who Played with Who &#9662;</div>
+                <button type="button" class="btn btn-sm btn-secondary played-with-expand-btn" id="played-with-expand" title="Expand full screen" aria-label="Expand Who Played with Who">⛶</button>
+            </div>
             <div id="played-with-list">
                 <div class="played-with-matrix-container">
-                    <table class="played-with-matrix">
-                        <thead>
-                            <tr><th></th>${headerCells}</tr>
-                        </thead>
-                        <tbody>
-                            ${rows}
-                        </tbody>
-                    </table>
+                    ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: false })}
                 </div>
             </div>
         </div>
     `;
+}
+
+function openPlayedWithFullscreen(event) {
+    const existing = document.getElementById('played-with-fullscreen');
+    if (existing) existing.remove();
+
+    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+    if (playerIds.length === 0) return;
+
+    const overlay = document.createElement('div');
+    overlay.id = 'played-with-fullscreen';
+    overlay.className = 'played-with-fullscreen';
+    overlay.innerHTML = `
+        <div class="played-with-fullscreen-panel">
+            <div class="played-with-fullscreen-header">
+                <div class="played-with-fullscreen-title">Who Played with Who</div>
+                <button type="button" class="modal-close" id="played-with-fullscreen-close" aria-label="Close">&times;</button>
+            </div>
+            <div class="played-with-matrix-container played-with-fullscreen-body">
+                ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: true })}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const close = () => {
+        overlay.remove();
+        document.removeEventListener('keydown', onKeyDown);
+    };
+    const onKeyDown = (e) => {
+        if (e.key === 'Escape') close();
+    };
+
+    overlay.querySelector('#played-with-fullscreen-close').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) close();
+    });
+    document.addEventListener('keydown', onKeyDown);
 }
 
 function getPlayerActionButtons(player) {
@@ -1076,6 +1134,15 @@ function togglePlayerGroup(header) {
         content.style.display = isHidden ? 'block' : 'none';
         header.innerHTML = header.innerHTML.replace(/ \&#9662;| \&#9652;/, '') + (isHidden ? ' &#9662;' : ' &#9652;');
     }
+}
+
+function bindPlayedWithExpand(event) {
+    const expandBtn = document.getElementById('played-with-expand');
+    if (!expandBtn) return;
+    expandBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openPlayedWithFullscreen(event);
+    });
 }
 
 function bindCollapsibleSections(eventId, status) {

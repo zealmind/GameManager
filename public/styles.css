@@ -1105,8 +1105,24 @@ html, body {
     margin-bottom: 6px;
 }
 
+.played-with-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.played-with-expand-btn {
+    flex-shrink: 0;
+    min-width: 36px;
+    padding: 4px 8px;
+    font-size: 16px;
+    line-height: 1;
+}
+
 .played-with-matrix-container {
     overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
 }
 
 .played-with-matrix {
@@ -1127,28 +1143,116 @@ html, body {
     background: var(--card-bg);
     font-weight: 600;
     font-size: 11px;
-    position: sticky;
-    left: 0;
-    z-index: 1;
 }
 
-.played-with-matrix thead th:first-child {
-    position: sticky;
-    left: 0;
-    z-index: 2;
-}
-
+.played-with-matrix thead th:first-child,
 .played-with-matrix tbody th {
-    background: var(--card-bg);
-    font-weight: 600;
-    font-size: 11px;
     position: sticky;
     left: 0;
     z-index: 1;
     text-align: left;
 }
 
+.played-with-matrix thead th:first-child {
+    z-index: 2;
+}
+
 .played-with-matrix td.played-with-self {
     color: var(--text-muted);
     font-style: italic;
+}
+
+.played-with-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0;
+}
+
+.played-with-fullscreen-panel {
+    background: var(--card-bg);
+    width: 100vw;
+    max-width: none;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0;
+    overflow: hidden;
+}
+
+.played-with-fullscreen-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.played-with-fullscreen-title {
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.played-with-fullscreen-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 16px 24px;
+}
+
+.played-with-matrix-names {
+    width: max-content;
+    min-width: 100%;
+    font-size: 13px;
+    table-layout: auto;
+}
+
+.played-with-matrix-names th,
+.played-with-matrix-names td {
+    padding: 4px 4px;
+}
+
+.played-with-matrix-names .played-with-col-header {
+    vertical-align: bottom;
+    height: 1px;
+    width: 28px;
+    min-width: 28px;
+    max-width: 28px;
+    padding: 4px 2px;
+    font-size: 11px;
+}
+
+.played-with-matrix-names .played-with-col-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    white-space: nowrap;
+    display: inline-block;
+    max-height: 9.5em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.15;
+}
+
+.played-with-matrix-names .played-with-row-header {
+    width: 1%;
+    max-width: 11em;
+    min-width: 0;
+    padding: 4px 6px;
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.played-with-matrix-names td {
+    width: 28px;
+    min-width: 28px;
+    max-width: 28px;
+    padding: 4px 2px;
+    font-size: 12px;
 }
