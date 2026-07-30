@@ -327,6 +327,22 @@ html, body {
     transform: translateY(0);
 }
 
+.share-modal-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.share-modal-actions .btn {
+    flex: 1;
+}
+
+.share-refresh-hint {
+    margin: 8px 0 0;
+    font-size: 12px;
+    color: var(--text-muted, #6b7280);
+}
+
 .modal-header {
     display: flex;
     justify-content: space-between;
@@ -792,6 +808,28 @@ html, body {
     background: rgba(0,0,0,0.6);
 }
 
+.welcome-error {
+    position: absolute;
+    top: calc(55% + 48px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 2;
+    width: min(90%, 320px);
+    padding: 10px 14px;
+    background: rgba(127, 29, 29, 0.92);
+    border: 1px solid rgba(252, 165, 165, 0.7);
+    border-radius: 10px;
+    color: #fecaca;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.35;
+}
+
+.welcome-error.hidden {
+    display: none;
+}
+
 .auth-debug {
     position: absolute;
     bottom: 28%;
@@ -808,11 +846,6 @@ html, body {
     max-width: 90%;
     text-align: center;
     pointer-events: none;
-}
-
-.enter-btn:active {
-    transform: translateX(-50%) scale(0.96);
-    background: rgba(0,0,0,0.6);
 }
 
 /* Manual Allotment */

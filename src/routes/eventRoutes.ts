@@ -149,34 +149,61 @@ router.post('/:eventId/start', withEventAccess as any, async (req: any, res: any
   }
 });
 
-// POST /events/:eventId/share - Generate a viewer share link
+async function requireEventOwner(req: AuthenticatedRequest, res: any): Promise<Event | null> {
+  const event = db.getEvent(req.params.eventId as string);
+  if (!event) {
+    res.status(404).json({ error: 'Event not found' });
+    return null;
+  }
+  if ((event as any).ownerId !== req.user!.id) {
+    res.status(403).json({ error: 'Forbidden' });
+    return null;
+  }
+  return event;
+}
+
+// POST /events/:eventId/share - Get or create the viewer share link (one token)
 router.post('/:eventId/share', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
-    const event = db.getEvent(req.params.eventId as string);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    if ((event as any).ownerId !== req.user!.id) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
-    const result = await db.generateShareToken(event.id, 'viewer', req.user!.id);
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+    const result = await db.getOrCreateShareToken(event.id, 'viewer', req.user!.id);
+    res.json({ token: result.token, permission: 'viewer', created: result.created });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /events/:eventId/share/refresh - Revoke viewer token and issue a new one
+router.post('/:eventId/share/refresh', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+    const result = await db.refreshShareToken(event.id, 'viewer', req.user!.id);
     res.json({ token: result.token, permission: 'viewer' });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// POST /events/:eventId/invite-moderator - Generate a moderator invite link
+// POST /events/:eventId/invite-moderator - Get or create the moderator invite link (one token)
 router.post('/:eventId/invite-moderator', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
-    const event = db.getEvent(req.params.eventId as string);
-    if (!event) {
-      return res.status(404).json({ error: 'Event not found' });
-    }
-    if ((event as any).ownerId !== req.user!.id) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
-    const result = await db.generateShareToken(event.id, 'moderator', req.user!.id);
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+    const result = await db.getOrCreateShareToken(event.id, 'moderator', req.user!.id);
+    res.json({ token: result.token, permission: 'moderator', created: result.created });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /events/:eventId/invite-moderator/refresh - Revoke moderator token and issue a new one
+router.post('/:eventId/invite-moderator/refresh', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+    const result = await db.refreshShareToken(event.id, 'moderator', req.user!.id);
     res.json({ token: result.token, permission: 'moderator' });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

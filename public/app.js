@@ -183,11 +183,43 @@ function clearAccessMode() {
     sessionStorage.removeItem('gm_access');
 }
 
+function clearShareParamsFromUrl() {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('viewer') && !url.searchParams.has('moderator')) return;
+    url.searchParams.delete('viewer');
+    url.searchParams.delete('moderator');
+    const next = url.pathname + (url.searchParams.toString() ? `?${url.searchParams}` : '') + url.hash;
+    window.history.replaceState({}, '', next);
+}
+
+function showWelcomeError(message) {
+    const el = document.getElementById('welcome-error');
+    if (!el) return;
+    el.textContent = message;
+    el.classList.remove('hidden');
+}
+
+function clearWelcomeError() {
+    const el = document.getElementById('welcome-error');
+    if (!el) return;
+    el.textContent = '';
+    el.classList.add('hidden');
+}
+
+async function handleInvalidShareAccess(err, mode) {
+    clearAccessMode();
+    clearShareParamsFromUrl();
+    showWelcomeError('Invalid or expired access. Please obtain access from Event Administrator');
+    setDebug(`${mode === 'moderator' ? 'Moderator invite' : 'Share'} link invalid — use Login / Enter`);
+    const btn = document.getElementById('enter-btn');
+    if (btn) btn.classList.remove('hidden');
+    await checkAuthState();
+}
+
 function initWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
     const btn = document.getElementById('enter-btn');
-    const debug = document.getElementById('auth-debug');
 
     if (!screen || !video || !btn) return;
 
@@ -205,35 +237,50 @@ function initWelcomeScreen() {
     if (access) {
         setAccessMode(access.mode, access.token);
         btn.textContent = 'Enter Site';
-        setDebug('Shared access — no login required');
+        setDebug(access.mode === 'moderator' ? 'Checking moderator invite...' : 'Checking share link...');
         screen.classList.add('active');
+        api(`${API_BASE}/share/${access.token}`, { timeoutMs: 4000 })
+            .then(() => {
+                clearWelcomeError();
+                setDebug(access.mode === 'moderator'
+                    ? 'Moderator access — no login required'
+                    : 'Shared access — no login required');
+            })
+            .catch(err => {
+                console.error('[welcome] share validation on init failed:', err);
+                handleInvalidShareAccess(err, access.mode);
+            });
     } else {
+        clearWelcomeError();
         checkAuthState();
     }
 
     btn.onclick = async () => {
         console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn(), accessMode, accessToken });
-        if (btn.textContent === 'Enter Site') {
+        if (btn.textContent === 'Enter Site' || btn.textContent === '▶ Play & Enter') {
             if (accessToken) {
+                const mode = accessMode;
                 try {
                     console.log('[welcome] validating share token:', accessToken);
                     const res = await api(`${API_BASE}/share/${accessToken}`);
                     console.log('[welcome] share validation response:', res);
+                    clearWelcomeError();
                     setAccessMode(accessMode, accessToken);
                     screen.classList.remove('active');
                     video.pause();
                     openEventDetail(res.eventId, true);
                 } catch (err) {
                     console.error('[welcome] share validation error:', err);
-                    showToast('Invalid share link');
-                    clearAccessMode();
+                    await handleInvalidShareAccess(err, mode);
                 }
             } else {
+                clearWelcomeError();
                 screen.classList.remove('active');
                 video.pause();
                 switchView('dashboard');
             }
         } else {
+            clearWelcomeError();
             btn.classList.add('hidden');
             showLoginModal();
         }
@@ -1872,53 +1919,88 @@ function openManualAllotModal(eventId, courtId) {
     });
 }
 
+function buildShareLink(permission, token) {
+    return `${window.location.origin}/?${permission}=${token}`;
+}
+
+function copyShareLink(link) {
+    navigator.clipboard.writeText(link)
+        .then(() => showToast('Link copied!'))
+        .catch(err => {
+            console.error('Clipboard copy failed:', err);
+            const textarea = document.createElement('textarea');
+            textarea.value = link;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                showToast('Link copied!');
+            } catch (e) {
+                showToast('Copy failed. Try pasting manually.');
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        });
+}
+
+function setShareModalLink(permission, token, input, copyBtn, refreshBtn) {
+    const link = buildShareLink(permission, token);
+    input.value = link;
+    input.disabled = false;
+    copyBtn.disabled = false;
+    refreshBtn.disabled = false;
+    copyBtn.onclick = () => copyShareLink(link);
+}
+
 function openShareModal(eventId, permission) {
     const overlay = document.getElementById('share-modal');
     const title = document.getElementById('share-modal-title');
     const input = document.getElementById('share-link-input');
     const copyBtn = document.getElementById('copy-share-btn');
+    const refreshBtn = document.getElementById('refresh-share-btn');
     const error = document.getElementById('share-error');
     if (!overlay) return;
 
     title.textContent = permission === 'moderator' ? 'Invite Moderator' : 'Share Event';
-    input.value = 'Generating...';
+    input.value = 'Loading...';
     input.disabled = true;
     copyBtn.disabled = true;
+    refreshBtn.disabled = true;
     error.classList.add('hidden');
     overlay.classList.add('active');
 
-    const endpoint = permission === 'moderator' ? '/invite-moderator' : '/share';
-    api(`${API_BASE}/events/${eventId}${endpoint}`, {
-        method: 'POST'
-    }).then(res => {
-        const link = `${window.location.origin}/?${permission}=${res.token}`;
-        input.value = link;
-        input.disabled = false;
-        copyBtn.disabled = false;
-        copyBtn.onclick = () => {
-            navigator.clipboard.writeText(link)
-                .then(() => showToast('Link copied!'))
-                .catch(err => {
-                    console.error("Clipboard copy failed:", err);
-                    const textarea = document.createElement('textarea');
-                    textarea.value = link;
-                    document.body.appendChild(textarea);
-                    textarea.select();
-                    try {
-                        document.execCommand('copy');
-                        showToast('Link copied!');
-                    } catch (e) {
-                        showToast('Copy failed. Try pasting manually.');
-                    } finally {
-                        document.body.removeChild(textarea);
-                    }
-                });
-        };
-    }).catch(err => {
-        input.value = 'Failed to generate link';
-        error.textContent = err.message;
-        error.classList.remove('hidden');
-    });
+    const baseEndpoint = permission === 'moderator' ? '/invite-moderator' : '/share';
+
+    const loadToken = () => api(`${API_BASE}/events/${eventId}${baseEndpoint}`, { method: 'POST' })
+        .then(res => setShareModalLink(permission, res.token, input, copyBtn, refreshBtn))
+        .catch(err => {
+            input.value = 'Failed to load link';
+            error.textContent = err.message;
+            error.classList.remove('hidden');
+            refreshBtn.disabled = false;
+        });
+
+    refreshBtn.onclick = () => {
+        if (!confirm("'Refresh Link' will revoke any old links and permission. Continue?")) return;
+        input.value = 'Refreshing...';
+        input.disabled = true;
+        copyBtn.disabled = true;
+        refreshBtn.disabled = true;
+        error.classList.add('hidden');
+        api(`${API_BASE}/events/${eventId}${baseEndpoint}/refresh`, { method: 'POST' })
+            .then(res => {
+                setShareModalLink(permission, res.token, input, copyBtn, refreshBtn);
+                showToast('New link created — old link revoked');
+            })
+            .catch(err => {
+                input.value = 'Failed to refresh link';
+                error.textContent = err.message;
+                error.classList.remove('hidden');
+                refreshBtn.disabled = false;
+            });
+    };
+
+    loadToken();
 
     overlay.querySelector('.modal-close').onclick = closeShareModal;
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeShareModal(); });

@@ -48,6 +48,16 @@ export declare class Database {
     getAllEvents(): Event[];
     getEventsByOwner(ownerId: string): Event[];
     createEvent(name: string, totalGamesToPlay: number, numCourts: number, ownerId: string): Promise<Event>;
+    private pruneShareTokens;
+    /** Return the existing token for this permission, or create one. Keeps only one token per permission. */
+    getOrCreateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{
+        token: string;
+        created: boolean;
+    }>;
+    /** Revoke the current token for this permission and issue a new one. */
+    refreshShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{
+        token: string;
+    }>;
     generateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{
         token: string;
     }>;

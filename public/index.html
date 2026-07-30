@@ -15,6 +15,7 @@
                 </video>
                 <div class="welcome-overlay"></div>
                 <button id="enter-btn" class="enter-btn">Loading...</button>
+                <div id="welcome-error" class="welcome-error hidden"></div>
                 <div id="auth-debug" class="auth-debug"></div>
             </div>
         </div>
@@ -45,7 +46,11 @@
                 <label>Share Link</label>
                 <input type="text" id="share-link-input" readonly>
             </div>
-            <button class="btn btn-primary" id="copy-share-btn">Copy Link</button>
+            <div class="share-modal-actions">
+                <button class="btn btn-primary" id="copy-share-btn">Copy Link</button>
+                <button class="btn btn-secondary" id="refresh-share-btn">Refresh Link</button>
+            </div>
+            <p class="share-refresh-hint">Refresh creates a new link and revokes the old one.</p>
             <div id="share-error" class="auth-error hidden"></div>
         </div>
     </div>

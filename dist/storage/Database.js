@@ -264,15 +264,53 @@ class Database {
         await this.persist();
         return event;
     }
-    async generateShareToken(eventId, permission, invitedBy) {
+    pruneShareTokens(event, permission, keep) {
+        const others = event.sharedAccess.filter(a => a.permission !== permission);
+        event.sharedAccess = keep ? [...others, keep] : others;
+    }
+    /** Return the existing token for this permission, or create one. Keeps only one token per permission. */
+    async getOrCreateShareToken(eventId, permission, invitedBy) {
         const event = this.events.get(eventId);
         if (!event)
             throw new Error('Event not found');
-        const token = node_crypto_1.default.randomBytes(16).toString('hex');
-        const access = { token, permission, invitedBy, createdAt: new Date().toISOString() };
-        event.sharedAccess.push(access);
+        const existing = event.sharedAccess.filter(a => a.permission === permission);
+        if (existing.length > 0) {
+            // Prefer the most recently created; drop duplicates of the same permission
+            const keep = [...existing].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+            if (existing.length > 1) {
+                this.pruneShareTokens(event, permission, keep);
+                await this.persist();
+            }
+            return { token: keep.token, created: false };
+        }
+        const access = {
+            token: node_crypto_1.default.randomBytes(16).toString('hex'),
+            permission,
+            invitedBy,
+            createdAt: new Date().toISOString(),
+        };
+        this.pruneShareTokens(event, permission, access);
         await this.persist();
-        return { token };
+        return { token: access.token, created: true };
+    }
+    /** Revoke the current token for this permission and issue a new one. */
+    async refreshShareToken(eventId, permission, invitedBy) {
+        const event = this.events.get(eventId);
+        if (!event)
+            throw new Error('Event not found');
+        const access = {
+            token: node_crypto_1.default.randomBytes(16).toString('hex'),
+            permission,
+            invitedBy,
+            createdAt: new Date().toISOString(),
+        };
+        this.pruneShareTokens(event, permission, access);
+        await this.persist();
+        return { token: access.token };
+    }
+    async generateShareToken(eventId, permission, invitedBy) {
+        const result = await this.getOrCreateShareToken(eventId, permission, invitedBy);
+        return { token: result.token };
     }
     resolveShareToken(token) {
         for (const event of this.events.values()) {

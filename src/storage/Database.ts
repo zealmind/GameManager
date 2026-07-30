@@ -338,14 +338,69 @@ export class Database {
     return event;
   }
 
-  async generateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{ token: string }> {
+  private pruneShareTokens(
+    event: Event,
+    permission: 'viewer' | 'moderator',
+    keep?: { token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }
+  ): void {
+    const others = event.sharedAccess.filter(a => a.permission !== permission);
+    event.sharedAccess = keep ? [...others, keep] : others;
+  }
+
+  /** Return the existing token for this permission, or create one. Keeps only one token per permission. */
+  async getOrCreateShareToken(
+    eventId: string,
+    permission: 'viewer' | 'moderator',
+    invitedBy: string
+  ): Promise<{ token: string; created: boolean }> {
     const event = this.events.get(eventId);
     if (!event) throw new Error('Event not found');
-    const token = crypto.randomBytes(16).toString('hex');
-    const access = { token, permission, invitedBy, createdAt: new Date().toISOString() };
-    event.sharedAccess.push(access);
+
+    const existing = event.sharedAccess.filter(a => a.permission === permission);
+    if (existing.length > 0) {
+      // Prefer the most recently created; drop duplicates of the same permission
+      const keep = [...existing].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      if (existing.length > 1) {
+        this.pruneShareTokens(event, permission, keep);
+        await this.persist();
+      }
+      return { token: keep.token, created: false };
+    }
+
+    const access = {
+      token: crypto.randomBytes(16).toString('hex'),
+      permission,
+      invitedBy,
+      createdAt: new Date().toISOString(),
+    };
+    this.pruneShareTokens(event, permission, access);
     await this.persist();
-    return { token };
+    return { token: access.token, created: true };
+  }
+
+  /** Revoke the current token for this permission and issue a new one. */
+  async refreshShareToken(
+    eventId: string,
+    permission: 'viewer' | 'moderator',
+    invitedBy: string
+  ): Promise<{ token: string }> {
+    const event = this.events.get(eventId);
+    if (!event) throw new Error('Event not found');
+
+    const access = {
+      token: crypto.randomBytes(16).toString('hex'),
+      permission,
+      invitedBy,
+      createdAt: new Date().toISOString(),
+    };
+    this.pruneShareTokens(event, permission, access);
+    await this.persist();
+    return { token: access.token };
+  }
+
+  async generateShareToken(eventId: string, permission: 'viewer' | 'moderator', invitedBy: string): Promise<{ token: string }> {
+    const result = await this.getOrCreateShareToken(eventId, permission, invitedBy);
+    return { token: result.token };
   }
 
   resolveShareToken(token: string): { eventId: string; permission: 'viewer' | 'moderator' } | null {
