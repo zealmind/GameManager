@@ -426,8 +426,9 @@ html, body {
 .game-score-edit {
     display: flex;
     flex-direction: column;
-    align-items: flex-end;
+    align-items: stretch;
     gap: 2px;
+    min-width: min(100%, 280px);
 }
 
 .game-vs {
@@ -627,11 +628,68 @@ html, body {
 }
 
 /* Court game card */
+.court-scores-wrap {
+    flex-shrink: 0;
+}
+
+.court-game-card.is-editing-score {
+    flex-wrap: wrap;
+}
+
+.court-game-card.is-editing-score .court-scores-wrap {
+    width: 100%;
+    order: 3;
+}
+
 .court-scores {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
     align-items: flex-end;
+}
+
+.court-game-card.is-editing-score .court-scores {
+    align-items: stretch;
+    width: 100%;
+}
+
+.court-score-actions {
+    display: flex;
+    flex-direction: row;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.court-score-display {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    background: var(--card-bg, #fff);
+    border-radius: 8px;
+    padding: 4px 8px;
+    cursor: pointer;
+    touch-action: manipulation;
+}
+
+.court-score-display:hover {
+    border-color: var(--primary);
+}
+
+.court-score-value {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--primary);
+}
+
+.court-score-edit-hint {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.court-score-expanded {
+    width: 100%;
 }
 
 .score-input-group {
@@ -640,20 +698,98 @@ html, body {
     gap: 6px;
 }
 
-.score-input {
-    width: 50px;
-    padding: 6px;
+.score-editor {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    width: 100%;
+    padding: 8px;
+    background: var(--bg, #f3f4f6);
+    border-radius: 10px;
+}
+
+.score-stepper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.score-team-tag {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    min-width: 18px;
+}
+
+.score-step-btn {
+    width: 40px;
+    height: 40px;
     border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 14px;
+    border-radius: 10px;
+    background: var(--card-bg, #fff);
+    color: var(--text-primary, #111);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.score-step-btn:active {
+    transform: scale(0.96);
+    background: var(--border);
+}
+
+.score-input {
+    width: 64px;
+    height: 40px;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 20px;
+    font-weight: 700;
     text-align: center;
     background: var(--card-bg);
+    color: var(--text-primary, #111);
+    -moz-appearance: textfield;
+}
+
+.score-input::-webkit-outer-spin-button,
+.score-input::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
 }
 
 .score-vs {
     font-weight: 700;
     color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 20px;
+    padding: 0 2px;
+}
+
+.score-edit-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    justify-content: flex-end;
+    width: 100%;
+}
+
+.completed-game-card.is-editing-score {
+    flex-wrap: wrap;
+}
+
+.completed-game-card.is-editing-score .game-score-side {
+    width: 100%;
+    align-items: stretch;
+    margin-top: 8px;
 }
 
 /* Leaderboard */

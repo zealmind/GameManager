@@ -237,16 +237,29 @@ router.post('/:eventId/games/:gameId/score', eventAccess_1.withEventAccess, even
         if (!isOwnerOrModerator(event, req)) {
             return res.status(403).json({ error: 'Forbidden' });
         }
-        const game = event.games.find((g) => g.id === req.params.gameId);
-        if (!game)
+        const gameId = req.params.gameId;
+        const scores = [Number(score_team1), Number(score_team2)];
+        const activeGame = event.games.find((g) => g.id === gameId);
+        const historyGame = event.gameHistory.find((g) => g.id === gameId);
+        // In-progress game: update live scores
+        if (activeGame && !activeGame.completed) {
+            if (!activeGame.started)
+                return res.status(400).json({ error: 'Game has not started yet' });
+            activeGame.scores = scores;
+            await db.persist();
+            return res.json(activeGame);
+        }
+        // Completed game: update history (and any leftover active copy)
+        const completedGame = historyGame || (activeGame?.completed ? activeGame : null);
+        if (!completedGame)
             return res.status(404).json({ error: 'Game not found' });
-        if (!game.started)
-            return res.status(400).json({ error: 'Game has not started yet' });
-        if (game.completed)
-            return res.status(400).json({ error: 'Game already completed' });
-        game.scores = [score_team1, score_team2];
+        completedGame.scores = scores;
+        if (historyGame)
+            historyGame.scores = scores;
+        if (activeGame?.completed)
+            activeGame.scores = scores;
         await db.persist();
-        res.json(game);
+        res.json(completedGame);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
