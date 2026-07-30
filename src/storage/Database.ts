@@ -1,48 +1,11 @@
 import { createClient } from "@libsql/client";
 import { Player } from '../models/Player';
 import { Event } from '../models/Event';
-import type { EventPlayerRegistration, PlayerStatus } from '../models/EventPlayerRegistration';
+import type { EventPlayerRegistration } from '../models/EventPlayerRegistration';
 import type { Game } from '../models/Game';
 import crypto from 'node:crypto';
 
-interface SerializedPlayer {
-  id: string;
-  name: string;
-  nickName?: string;
-  ownerId?: string;
-}
-
-interface SerializedGame {
-  id: string;
-  eventId: string;
-  gameNumber: number;
-  courtId: number;
-  players: {
-    team1: string[];
-    team2: string[];
-  };
-  scores?: [number, number];
-  createdAt: string;
-  completed: boolean;
-  started: boolean;
-  startedAt?: string;
-  completedAt?: string;
-}
-
-interface SerializedEvent {
-  id: string;
-  name: string;
-  courts: number;
-  totalGamesToPlay: number;
-  startedAt?: string;
-  endedAt?: string;
-  ownerId: string;
-  players: SerializedPlayer[];
-  registrations: EventPlayerRegistration[];
-  games: SerializedGame[];
-  gameHistory: SerializedGame[];
-  sharedAccess: Array<{ token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }>;
-}
+type ShareAccess = { token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string };
 
 export class Database {
   private static instance: Database;
@@ -55,7 +18,7 @@ export class Database {
     this.players = new Map<string, Player>();
     this.events = new Map<string, Event>();
     this.eventRegistrations = new Map<string, EventPlayerRegistration>();
-    
+
     const dbUrl = process.env.TURSO_DATABASE_URL;
     if (!dbUrl && process.env.NODE_ENV !== 'test') {
       throw new Error('TURSO_DATABASE_URL is required');
@@ -88,6 +51,7 @@ export class Database {
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        nick_name TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
@@ -96,6 +60,7 @@ export class Database {
         courts INTEGER NOT NULL,
         totalGamesToPlay INTEGER NOT NULL,
         startedAt TEXT,
+        endedAt TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS registrations (
@@ -105,11 +70,13 @@ export class Database {
         status TEXT NOT NULL DEFAULT 'WAITING',
         targetGames INTEGER NOT NULL DEFAULT 6,
         partners TEXT NOT NULL DEFAULT '[]',
+        priority INTEGER NOT NULL DEFAULT 10,
         PRIMARY KEY (eventId, playerId)
       );
       CREATE TABLE IF NOT EXISTS games (
         id TEXT PRIMARY KEY,
         eventId TEXT NOT NULL,
+        gameNumber INTEGER NOT NULL DEFAULT 0,
         courtId INTEGER NOT NULL,
         players TEXT NOT NULL,
         scores TEXT,
@@ -117,133 +84,327 @@ export class Database {
         completed INTEGER NOT NULL DEFAULT 0,
         started INTEGER NOT NULL DEFAULT 0,
         startedAt TEXT,
-        completedAt TEXT
+        completedAt TEXT,
+        in_history INTEGER NOT NULL DEFAULT 0
       );
-      CREATE TABLE IF NOT EXISTS app_state (
-        id INTEGER PRIMARY KEY,
-        data TEXT NOT NULL
+      CREATE TABLE IF NOT EXISTS shared_access (
+        token TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        permission TEXT NOT NULL,
+        invited_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
     `);
 
-    await this.migrateAddOwnerId();
     await this.load();
   }
 
-  private async migrateAddOwnerId(): Promise<void> {
-    try {
-      await this.client.execute("ALTER TABLE events ADD COLUMN owner_id TEXT");
-    } catch {
-      // column already exists
+  private syncRegistrationIndex(event?: Event): void {
+    if (event) {
+      for (const key of Array.from(this.eventRegistrations.keys())) {
+        if (key.startsWith(`${event.id}_`)) this.eventRegistrations.delete(key);
+      }
+      for (const reg of event.registrations.values()) {
+        this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+      }
+      return;
     }
-    try {
-      await this.client.execute("ALTER TABLE players ADD COLUMN owner_id TEXT");
-    } catch {
-      // column already exists
+    this.eventRegistrations.clear();
+    for (const e of this.events.values()) {
+      for (const reg of e.registrations.values()) {
+        this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+      }
     }
   }
 
-  public async persist(): Promise<void> {
-    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId }));
-    const eventsData = Array.from(this.events.values()).map<SerializedEvent>(e => ({
-      id: e.id,
-      name: e.name,
-      courts: e.courts,
-      totalGamesToPlay: e.totalGamesToPlay,
-      startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
-      endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
-      ownerId: (e as any).ownerId || '',
-      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId })),
-      registrations: Array.from(e.registrations.values()),
-      games: e.games.map<SerializedGame>(g => ({
-        ...g,
-        createdAt: g.createdAt.toISOString(),
-        startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
-        completedAt: g.completedAt?.toISOString()
-      })),
-      gameHistory: e.gameHistory.map<SerializedGame>(g => ({
-        ...g,
-        createdAt: g.createdAt.toISOString(),
-        startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
-        completedAt: g.completedAt?.toISOString()
-      })),
-      sharedAccess: (e as any).sharedAccess || []
-    }));
-    const registrationsData = Array.from(this.eventRegistrations.values());
+  private async batch(stmts: Array<{ sql: string; args?: any[] }>): Promise<void> {
+    if (stmts.length === 0) return;
+    if (typeof (this.client as any).batch === 'function') {
+      await (this.client as any).batch(
+        stmts.map(s => ({ sql: s.sql, args: s.args ?? [] })),
+        'write'
+      );
+    } else {
+      for (const s of stmts) {
+        await this.client.execute(s.sql, s.args ?? []);
+      }
+    }
+  }
 
-    const data = { players: playersData, events: eventsData, eventRegistrations: registrationsData };
-    const json = JSON.stringify(data, null, 2);
+  private playerUpsertStmt(player: Player): { sql: string; args: any[] } {
+    return {
+      sql: 'INSERT INTO players (id, name, nick_name, owner_id) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, nick_name = excluded.nick_name, owner_id = excluded.owner_id',
+      args: [player.id, player.name, player.nickName ?? null, (player as any).ownerId ?? null],
+    };
+  }
 
-    await this.client.execute(
-      'INSERT OR REPLACE INTO app_state (id, data) VALUES (?, ?)',
-      [1, json]
-    );
+  private registrationUpsertStmt(r: EventPlayerRegistration): { sql: string; args: any[] } {
+    return {
+      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(eventId, playerId) DO UPDATE SET
+              gamesPlayedCount = excluded.gamesPlayedCount,
+              status = excluded.status,
+              targetGames = excluded.targetGames,
+              partners = excluded.partners,
+              priority = excluded.priority`,
+      args: [
+        r.eventId,
+        r.playerId,
+        r.gamesPlayedCount,
+        r.status,
+        r.targetGames,
+        JSON.stringify(r.partners || []),
+        r.priority ?? 10,
+      ],
+    };
+  }
+
+  private gameUpsertStmt(g: Game, inHistory: boolean): { sql: string; args: any[] } {
+    return {
+      sql: `INSERT INTO games (
+              id, eventId, gameNumber, courtId, players, scores, createdAt,
+              completed, started, startedAt, completedAt, in_history
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              eventId = excluded.eventId,
+              gameNumber = excluded.gameNumber,
+              courtId = excluded.courtId,
+              players = excluded.players,
+              scores = excluded.scores,
+              createdAt = excluded.createdAt,
+              completed = excluded.completed,
+              started = excluded.started,
+              startedAt = excluded.startedAt,
+              completedAt = excluded.completedAt,
+              in_history = excluded.in_history`,
+      args: [
+        g.id,
+        g.eventId,
+        g.gameNumber ?? 0,
+        g.courtId,
+        JSON.stringify(g.players),
+        g.scores != null ? JSON.stringify(g.scores) : null,
+        g.createdAt instanceof Date ? g.createdAt.toISOString() : g.createdAt,
+        g.completed ? 1 : 0,
+        g.started ? 1 : 0,
+        g.startedAt ? (g.startedAt instanceof Date ? g.startedAt.toISOString() : g.startedAt) : null,
+        g.completedAt ? (g.completedAt instanceof Date ? g.completedAt.toISOString() : g.completedAt) : null,
+        inHistory ? 1 : 0,
+      ],
+    };
+  }
+
+  /** Persist a single player row. */
+  async savePlayer(player: Player): Promise<void> {
+    const stmt = this.playerUpsertStmt(player);
+    await this.client.execute(stmt.sql, stmt.args);
+  }
+
+  /**
+   * Persist one event and its related rows only (registrations, games, shares),
+   * plus any players attached to the event (e.g. nicknames).
+   * Other events are left untouched for better concurrency.
+   */
+  async persistEvent(eventId: string): Promise<void> {
+    const event = this.events.get(eventId);
+    if (!event) throw new Error('Event not found');
+    this.syncRegistrationIndex(event);
+
+    const stmts: Array<{ sql: string; args?: any[] }> = [];
+
+    for (const player of event.players.values()) {
+      stmts.push(this.playerUpsertStmt(player));
+    }
+
+    stmts.push({
+      sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              courts = excluded.courts,
+              totalGamesToPlay = excluded.totalGamesToPlay,
+              startedAt = excluded.startedAt,
+              endedAt = excluded.endedAt,
+              owner_id = excluded.owner_id`,
+      args: [
+        event.id,
+        event.name,
+        event.courts,
+        event.totalGamesToPlay,
+        event.startedAt ? event.startedAt.toISOString() : null,
+        event.endedAt ? event.endedAt.toISOString() : null,
+        (event as any).ownerId || null,
+      ],
+    });
+
+    const regPlayerIds = Array.from(event.registrations.keys());
+    if (regPlayerIds.length === 0) {
+      stmts.push({ sql: 'DELETE FROM registrations WHERE eventId = ?', args: [event.id] });
+    } else {
+      stmts.push({
+        sql: `DELETE FROM registrations WHERE eventId = ? AND playerId NOT IN (${regPlayerIds.map(() => '?').join(',')})`,
+        args: [event.id, ...regPlayerIds],
+      });
+    }
+    for (const reg of event.registrations.values()) {
+      stmts.push(this.registrationUpsertStmt(reg));
+    }
+
+    const gamesById = new Map<string, { game: Game; inHistory: boolean }>();
+    for (const g of event.games) {
+      gamesById.set(g.id, { game: g, inHistory: !!g.completed });
+    }
+    for (const g of event.gameHistory) {
+      gamesById.set(g.id, { game: g, inHistory: true });
+    }
+    const gameIds = Array.from(gamesById.keys());
+    if (gameIds.length === 0) {
+      stmts.push({ sql: 'DELETE FROM games WHERE eventId = ?', args: [event.id] });
+    } else {
+      stmts.push({
+        sql: `DELETE FROM games WHERE eventId = ? AND id NOT IN (${gameIds.map(() => '?').join(',')})`,
+        args: [event.id, ...gameIds],
+      });
+    }
+    for (const { game, inHistory } of gamesById.values()) {
+      stmts.push(this.gameUpsertStmt(game, inHistory));
+    }
+
+    const tokens = (event.sharedAccess || []).map(a => a.token);
+    if (tokens.length === 0) {
+      stmts.push({ sql: 'DELETE FROM shared_access WHERE event_id = ?', args: [event.id] });
+    } else {
+      stmts.push({
+        sql: `DELETE FROM shared_access WHERE event_id = ? AND token NOT IN (${tokens.map(() => '?').join(',')})`,
+        args: [event.id, ...tokens],
+      });
+    }
+    for (const a of event.sharedAccess || []) {
+      stmts.push({
+        sql: `INSERT INTO shared_access (token, event_id, permission, invited_by, created_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(token) DO UPDATE SET
+                event_id = excluded.event_id,
+                permission = excluded.permission,
+                invited_by = excluded.invited_by,
+                created_at = excluded.created_at`,
+        args: [a.token, event.id, a.permission, a.invitedBy, a.createdAt],
+      });
+    }
+
+    await this.batch(stmts);
   }
 
   private async load(): Promise<void> {
     try {
-      const result = await this.client.execute('SELECT data FROM app_state WHERE id = ?', [1]);
-      
-      if (result.rows.length === 0) return;
+      this.players.clear();
+      this.events.clear();
+      this.eventRegistrations.clear();
 
-      const raw = result.rows[0].data as string;
-      const data = JSON.parse(raw) as {
-        players: SerializedPlayer[];
-        events: SerializedEvent[];
-        eventRegistrations: EventPlayerRegistration[];
-      };
-      if (!data) return;
-
-      for (const p of data.players) {
-        const player = new Player(p.name, p.id);
-        player.nickName = p.nickName;
-        (player as any).ownerId = p.ownerId;
-        this.players.set(p.id, player);
+      const playerRows = await this.client.execute('SELECT id, name, nick_name, owner_id FROM players');
+      for (const row of playerRows.rows as any[]) {
+        const player = new Player(row.name as string, row.id as string);
+        if (row.nick_name) player.nickName = row.nick_name as string;
+        (player as any).ownerId = row.owner_id ?? undefined;
+        this.players.set(player.id, player);
       }
 
-      for (const e of data.events) {
-        const event = new Event(e.name, e.totalGamesToPlay, e.courts);
-        event.id = e.id;
-        event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
-        event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
-        (event as any).ownerId = e.ownerId;
-        event.sharedAccess = e.sharedAccess || [];
+      const eventRows = await this.client.execute(
+        'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id FROM events'
+      );
+      const regRows = await this.client.execute(
+        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority FROM registrations'
+      );
+      const gameRows = await this.client.execute(
+        `SELECT id, eventId, gameNumber, courtId, players, scores, createdAt,
+                completed, started, startedAt, completedAt, in_history FROM games`
+      );
+      const shareRows = await this.client.execute(
+        'SELECT token, event_id, permission, invited_by, created_at FROM shared_access'
+      );
 
-        for (const p of e.players) {
-          const player = this.players.get(p.id) || new Player(p.name, p.id);
-          player.nickName = p.nickName;
-          if (!this.players.has(player.id)) {
-            (player as any).ownerId = p.ownerId;
-            this.players.set(player.id, player);
-          }
-          event.players.set(player.id, player);
-        }
+      const regsByEvent = new Map<string, EventPlayerRegistration[]>();
+      for (const row of regRows.rows as any[]) {
+        const partners = typeof row.partners === 'string' ? JSON.parse(row.partners) : (row.partners || []);
+        const reg: EventPlayerRegistration = {
+          eventId: row.eventId,
+          playerId: row.playerId,
+          gamesPlayedCount: Number(row.gamesPlayedCount) || 0,
+          status: row.status,
+          targetGames: Number(row.targetGames) || 0,
+          partners,
+          priority: row.priority != null ? Number(row.priority) : 10,
+        };
+        const list = regsByEvent.get(reg.eventId) || [];
+        list.push(reg);
+        regsByEvent.set(reg.eventId, list);
+        this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+      }
 
-        for (const r of (e.registrations || [])) {
+      const gamesByEvent = new Map<string, { active: Game[]; history: Game[] }>();
+      for (const row of gameRows.rows as any[]) {
+        const players = typeof row.players === 'string' ? JSON.parse(row.players) : row.players;
+        const scores = row.scores == null
+          ? undefined
+          : (typeof row.scores === 'string' ? JSON.parse(row.scores) : row.scores);
+        const game: Game = {
+          id: row.id,
+          eventId: row.eventId,
+          gameNumber: Number(row.gameNumber) || 0,
+          courtId: Number(row.courtId),
+          players,
+          scores,
+          createdAt: new Date(row.createdAt),
+          completed: Boolean(row.completed),
+          started: Boolean(row.started),
+          startedAt: row.startedAt ? new Date(row.startedAt) : undefined,
+          completedAt: row.completedAt ? new Date(row.completedAt) : undefined,
+        };
+        const bucket = gamesByEvent.get(game.eventId) || { active: [], history: [] };
+        if (row.in_history) bucket.history.push(game);
+        else bucket.active.push(game);
+        gamesByEvent.set(game.eventId, bucket);
+      }
+
+      const sharesByEvent = new Map<string, ShareAccess[]>();
+      for (const row of shareRows.rows as any[]) {
+        const access: ShareAccess = {
+          token: row.token,
+          permission: row.permission,
+          invitedBy: row.invited_by,
+          createdAt: row.created_at,
+        };
+        const list = sharesByEvent.get(row.event_id) || [];
+        list.push(access);
+        sharesByEvent.set(row.event_id, list);
+      }
+
+      for (const row of eventRows.rows as any[]) {
+        const event = new Event(row.name, Number(row.totalGamesToPlay), Number(row.courts));
+        event.id = row.id;
+        event.startedAt = row.startedAt ? new Date(row.startedAt) : undefined;
+        event.endedAt = row.endedAt ? new Date(row.endedAt) : undefined;
+        (event as any).ownerId = row.owner_id || '';
+        event.sharedAccess = sharesByEvent.get(event.id) || [];
+
+        const regs = regsByEvent.get(event.id) || [];
+        for (const r of regs) {
           event.registrations.set(r.playerId, r);
+          const player = this.players.get(r.playerId);
+          if (player) event.players.set(player.id, player);
         }
 
-        event.games = e.games.map(g => ({
-          ...g,
-          createdAt: new Date(g.createdAt),
-          startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
-          completedAt: g.completedAt ? new Date(g.completedAt) : undefined
-        }));
+        const games = gamesByEvent.get(event.id) || { active: [], history: [] };
+        event.games = games.active;
+        event.gameHistory = games.history;
 
-        event.gameHistory = e.gameHistory.map(g => ({
-          ...g,
-          createdAt: new Date(g.createdAt),
-          startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
-          completedAt: g.completedAt ? new Date(g.completedAt) : undefined
-        }));
-
-        const allGameNumbers = [...event.games, ...event.gameHistory].map(g => g.gameNumber).filter((n): n is number => typeof n === 'number');
+        const allGameNumbers = [...event.games, ...event.gameHistory]
+          .map(g => g.gameNumber)
+          .filter((n): n is number => typeof n === 'number');
         event.nextGameNumber = allGameNumbers.length > 0 ? Math.max(...allGameNumbers) + 1 : 1;
 
         this.events.set(event.id, event);
-      }
-
-      for (const r of data.eventRegistrations) {
-        this.eventRegistrations.set(`${r.eventId}_${r.playerId}`, r);
       }
     } catch (err) {
       console.error('Failed to load database', err);
@@ -299,8 +460,7 @@ export class Database {
   }
 
   async createPlayer(name: string, ownerId: string): Promise<Player> {
-    const existing = this.players.values();
-    for (const p of existing) {
+    for (const p of this.players.values()) {
       if (p.name === name && (p as any).ownerId === ownerId) {
         throw new Error(`Player "${name}" already exists`);
       }
@@ -308,7 +468,7 @@ export class Database {
     const player = new Player(name);
     (player as any).ownerId = ownerId;
     this.players.set(player.id, player);
-    await this.persist();
+    await this.savePlayer(player);
     return player;
   }
 
@@ -334,20 +494,22 @@ export class Database {
     (event as any).ownerId = ownerId;
     event.sharedAccess = [];
     this.events.set(event.id, event);
-    await this.persist();
+    await this.client.execute(
+      'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId]
+    );
     return event;
   }
 
   private pruneShareTokens(
     event: Event,
     permission: 'viewer' | 'moderator',
-    keep?: { token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }
+    keep?: ShareAccess
   ): void {
     const others = event.sharedAccess.filter(a => a.permission !== permission);
     event.sharedAccess = keep ? [...others, keep] : others;
   }
 
-  /** Return the existing token for this permission, or create one. Keeps only one token per permission. */
   async getOrCreateShareToken(
     eventId: string,
     permission: 'viewer' | 'moderator',
@@ -358,27 +520,25 @@ export class Database {
 
     const existing = event.sharedAccess.filter(a => a.permission === permission);
     if (existing.length > 0) {
-      // Prefer the most recently created; drop duplicates of the same permission
       const keep = [...existing].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (existing.length > 1) {
         this.pruneShareTokens(event, permission, keep);
-        await this.persist();
+        await this.persistEvent(eventId);
       }
       return { token: keep.token, created: false };
     }
 
-    const access = {
+    const access: ShareAccess = {
       token: crypto.randomBytes(16).toString('hex'),
       permission,
       invitedBy,
       createdAt: new Date().toISOString(),
     };
     this.pruneShareTokens(event, permission, access);
-    await this.persist();
+    await this.persistEvent(eventId);
     return { token: access.token, created: true };
   }
 
-  /** Revoke the current token for this permission and issue a new one. */
   async refreshShareToken(
     eventId: string,
     permission: 'viewer' | 'moderator',
@@ -387,14 +547,14 @@ export class Database {
     const event = this.events.get(eventId);
     if (!event) throw new Error('Event not found');
 
-    const access = {
+    const access: ShareAccess = {
       token: crypto.randomBytes(16).toString('hex'),
       permission,
       invitedBy,
       createdAt: new Date().toISOString(),
     };
     this.pruneShareTokens(event, permission, access);
-    await this.persist();
+    await this.persistEvent(eventId);
     return { token: access.token };
   }
 
@@ -423,7 +583,6 @@ export class Database {
     );
   }
 
-  // Event Player Registration operations
   getEventRegistration(eventId: string, playerId: string): EventPlayerRegistration | undefined {
     return this.eventRegistrations.get(`${eventId}_${playerId}`);
   }
@@ -434,17 +593,26 @@ export class Database {
 
   async createEventRegistration(eventId: string, playerId: string, targetGames: number): Promise<EventPlayerRegistration> {
     const key = `${eventId}_${playerId}`;
-      const registration: EventPlayerRegistration = {
-        eventId,
-        playerId,
-        gamesPlayedCount: 0,
-        status: 'WAITING',
-        targetGames,
-        partners: [],
-        priority: 10,
-      };
+    const registration: EventPlayerRegistration = {
+      eventId,
+      playerId,
+      gamesPlayedCount: 0,
+      status: 'WAITING',
+      targetGames,
+      partners: [],
+      priority: 10,
+    };
     this.eventRegistrations.set(key, registration);
-    await this.persist();
+    const event = this.events.get(eventId);
+    if (event) {
+      event.registrations.set(playerId, registration);
+      const player = this.players.get(playerId);
+      if (player) event.players.set(player.id, player);
+      await this.persistEvent(eventId);
+    } else {
+      const stmt = this.registrationUpsertStmt(registration);
+      await this.client.execute(stmt.sql, stmt.args);
+    }
     return registration;
   }
 
@@ -452,46 +620,77 @@ export class Database {
     const key = `${eventId}_${playerId}`;
     const existing = this.eventRegistrations.get(key);
     if (!existing) return undefined;
-    
+
     const updated = { ...existing, ...updates };
     this.eventRegistrations.set(key, updated);
-    await this.persist();
+    const event = this.events.get(eventId);
+    if (event) {
+      event.registrations.set(playerId, updated);
+      await this.persistEvent(eventId);
+    } else {
+      const stmt = this.registrationUpsertStmt(updated);
+      await this.client.execute(stmt.sql, stmt.args);
+    }
     return updated;
   }
 
-  // Game operations
   getCompletedGames(eventId: string): Game[] {
     const event = this.events.get(eventId);
     return event?.gameHistory || [];
   }
 
   async deletePlayer(playerId: string): Promise<void> {
-    this.players.delete(playerId);
+    const affectedEventIds: string[] = [];
     for (const event of this.events.values()) {
-      event.removePlayer(playerId);
-    }
-    for (const key of Array.from(this.eventRegistrations.keys())) {
-      if (key.endsWith(`_${playerId}`)) {
-        this.eventRegistrations.delete(key);
+      if (event.players.has(playerId) || event.registrations.has(playerId)) {
+        affectedEventIds.push(event.id);
+        try {
+          event.removePlayer(playerId);
+        } catch {
+          // If playing, still force-remove from maps for delete
+          event.players.delete(playerId);
+          event.registrations.delete(playerId);
+        }
       }
     }
-    await this.persist();
+    this.players.delete(playerId);
+    for (const key of Array.from(this.eventRegistrations.keys())) {
+      if (key.endsWith(`_${playerId}`)) this.eventRegistrations.delete(key);
+    }
+
+    await this.batch([
+      { sql: 'DELETE FROM registrations WHERE playerId = ?', args: [playerId] },
+      { sql: 'DELETE FROM players WHERE id = ?', args: [playerId] },
+    ]);
+
+    for (const eventId of affectedEventIds) {
+      await this.persistEvent(eventId);
+    }
   }
 
   async deleteEvent(eventId: string): Promise<void> {
     this.events.delete(eventId);
     for (const key of Array.from(this.eventRegistrations.keys())) {
-      if (key.startsWith(`${eventId}_`)) {
-        this.eventRegistrations.delete(key);
-      }
+      if (key.startsWith(`${eventId}_`)) this.eventRegistrations.delete(key);
     }
-    await this.persist();
+    await this.batch([
+      { sql: 'DELETE FROM shared_access WHERE event_id = ?', args: [eventId] },
+      { sql: 'DELETE FROM games WHERE eventId = ?', args: [eventId] },
+      { sql: 'DELETE FROM registrations WHERE eventId = ?', args: [eventId] },
+      { sql: 'DELETE FROM events WHERE id = ?', args: [eventId] },
+    ]);
   }
 
   async clear(): Promise<void> {
     this.players.clear();
     this.events.clear();
     this.eventRegistrations.clear();
-    await this.client.execute('DELETE FROM app_state WHERE id = ?', [1]);
+    await this.batch([
+      { sql: 'DELETE FROM shared_access' },
+      { sql: 'DELETE FROM games' },
+      { sql: 'DELETE FROM registrations' },
+      { sql: 'DELETE FROM players' },
+      { sql: 'DELETE FROM events' },
+    ]);
   }
 }

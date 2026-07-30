@@ -35,7 +35,7 @@ router.delete('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEve
       return res.status(400).json({ error: result.reason });
     }
 
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -66,7 +66,7 @@ router.post('/:eventId/schedule', withEventAccess as any, loadEvent as any, asyn
       });
     }
 
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.status(201).json(result.game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -93,7 +93,7 @@ router.post('/:eventId/end', withEventAccess as any, loadEvent as any, async (re
       return res.status(400).json({ error: 'Event has already been ended' });
     }
     event.endedAt = new Date();
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.json({ success: true, endedAt: event.endedAt });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -160,7 +160,7 @@ router.post('/:eventId/courts/:courtId/allot-manual', withEventAccess as any, lo
     }
 
     event.games.push(game);
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.status(201).json(game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -194,7 +194,7 @@ router.post('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEvent
       });
     }
 
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.status(201).json(result.game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -209,7 +209,7 @@ router.post('/:eventId/games/:gameId/start', withEventAccess as any, loadEvent a
       return res.status(403).json({ error: 'Forbidden' });
     }
     const result = schedulingService.startGame(req.params.eventId as string, req.params.gameId as string);
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     if (!result.success) {
       return res.status(400).json({ error: result.reason });
     }
@@ -234,7 +234,7 @@ router.post('/:eventId/games/:gameId/end', withEventAccess as any, loadEvent as 
     if (!result.success) {
       return res.status(400).json({ error: result.reason, blockingConstraints: result.blockingConstraints });
     }
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.json(result.game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -259,7 +259,7 @@ router.post('/:eventId/games/:gameId/score', withEventAccess as any, loadEvent a
     if (game.completed) return res.status(400).json({ error: 'Game already completed' });
 
     game.scores = [score_team1, score_team2];
-    await db.persist();
+    await db.persistEvent(req.params.eventId as string);
     res.json(game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -290,7 +290,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
     const players = Array.from(event.players.values()) as Array<{ nickName?: string }>;
     if (event.isStarted() && players.some(p => !p.nickName)) {
       event.assignNickNames();
-      await db.persist();
+      await db.persistEvent(req.params.eventId as string);
     }
 
     const avgGames = event.getAverageGamesPlayed();

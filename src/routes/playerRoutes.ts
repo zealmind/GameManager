@@ -96,7 +96,7 @@ router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async
     }
 
     event.addPlayer(player);
-    await db.persist();
+    await db.persistEvent(event.id);
     res.status(201).json({ player, registration: event.getRegistration(player.id) });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -128,7 +128,7 @@ router.patch('/:eventId/players/:playerId', withEventAccess as any, loadEvent as
       event.recalculateTargetGames();
     }
 
-    await db.persist();
+    await db.persistEvent(event.id);
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

@@ -96,7 +96,7 @@ router.delete('/:eventId/share', authenticate, async (req: AuthenticatedRequest,
       return res.status(403).json({ error: 'Forbidden' });
     }
     event.sharedAccess = [];
-    await db.persist();
+    await db.persistEvent(event.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -142,7 +142,7 @@ router.post('/:eventId/start', withEventAccess as any, async (req: any, res: any
       return res.status(400).json({ error: 'Event has already started' });
     }
     event.start();
-    await db.persist();
+    await db.persistEvent(event.id);
     res.json({ success: true, startedAt: event.startedAt });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -231,7 +231,7 @@ router.delete('/:eventId/players/:playerId', withEventAccess as any, loadEvent a
       return res.status(400).json({ error: 'Cannot unregister after event has started' });
     }
     event.removePlayer(req.params.playerId as string);
-    await db.persist();
+    await db.persistEvent(event.id);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
