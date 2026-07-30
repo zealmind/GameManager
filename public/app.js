@@ -1077,7 +1077,37 @@ function renderPlayedWithCard(event) {
     `;
 }
 
-function openPlayedWithFullscreen(event) {
+function requestElementFullscreen(el) {
+    const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+    if (!req) return Promise.resolve(false);
+    return Promise.resolve(req.call(el)).then(() => true).catch(() => false);
+}
+
+function exitDocumentFullscreen() {
+    const doc = document;
+    if (!doc.fullscreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) return;
+    const exit = doc.exitFullscreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
+    try { exit?.call(doc); } catch {}
+}
+
+function lockLandscapeOrientation() {
+    try {
+        if (screen.orientation?.lock) {
+            return screen.orientation.lock('landscape').then(() => true).catch(() => false);
+        }
+    } catch {}
+    return Promise.resolve(false);
+}
+
+function unlockOrientation() {
+    try { screen.orientation?.unlock?.(); } catch {}
+}
+
+function isPortraitMobile() {
+    return window.matchMedia('(orientation: portrait) and (max-width: 900px)').matches;
+}
+
+async function openPlayedWithFullscreen(event) {
     const existing = document.getElementById('played-with-fullscreen');
     if (existing) existing.remove();
 
@@ -1093,6 +1123,7 @@ function openPlayedWithFullscreen(event) {
                 <div class="played-with-fullscreen-title">Who Played with Who</div>
                 <button type="button" class="modal-close" id="played-with-fullscreen-close" aria-label="Close">&times;</button>
             </div>
+            <div class="played-with-rotate-hint" id="played-with-rotate-hint" hidden>Rotate to landscape for the best view</div>
             <div class="played-with-matrix-container played-with-fullscreen-body">
                 ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: true })}
             </div>
@@ -1100,19 +1131,50 @@ function openPlayedWithFullscreen(event) {
     `;
     document.body.appendChild(overlay);
 
-    const close = () => {
-        overlay.remove();
-        document.removeEventListener('keydown', onKeyDown);
+    const hint = overlay.querySelector('#played-with-rotate-hint');
+    const updateRotateHint = () => {
+        if (!hint) return;
+        hint.hidden = !isPortraitMobile();
     };
+
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener('keydown', onKeyDown);
+        document.removeEventListener('fullscreenchange', onFullscreenChange);
+        document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+        orientationMql?.removeEventListener?.('change', updateRotateHint);
+        unlockOrientation();
+        exitDocumentFullscreen();
+        overlay.remove();
+    };
+
     const onKeyDown = (e) => {
         if (e.key === 'Escape') close();
     };
+    const onFullscreenChange = () => {
+        const fsEl = document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+        if (!fsEl) close();
+    };
+
+    const orientationMql = window.matchMedia('(orientation: portrait)');
+    orientationMql.addEventListener?.('change', updateRotateHint);
+    updateRotateHint();
 
     overlay.querySelector('#played-with-fullscreen-close').addEventListener('click', close);
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) close();
     });
     document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+
+    const enteredFs = await requestElementFullscreen(overlay);
+    if (enteredFs) {
+        await lockLandscapeOrientation();
+        updateRotateHint();
+    }
 }
 
 function getPlayerActionButtons(player) {
