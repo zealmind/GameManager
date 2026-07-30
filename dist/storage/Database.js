@@ -102,7 +102,7 @@ class Database {
         }
     }
     async persist() {
-        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, ownerId: p.ownerId }));
+        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId }));
         const eventsData = Array.from(this.events.values()).map(e => ({
             id: e.id,
             name: e.name,
@@ -111,7 +111,7 @@ class Database {
             startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
             endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
             ownerId: e.ownerId || '',
-            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, ownerId: p.ownerId })),
+            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId })),
             registrations: Array.from(e.registrations.values()),
             games: e.games.map(g => ({
                 ...g,
@@ -142,15 +142,8 @@ class Database {
             if (!data)
                 return;
             for (const p of data.players) {
-                delete p.nickName;
-            }
-            for (const e of data.events) {
-                for (const p of (e.players || [])) {
-                    delete p.nickName;
-                }
-            }
-            for (const p of data.players) {
                 const player = new Player_1.Player(p.name, p.id);
+                player.nickName = p.nickName;
                 player.ownerId = p.ownerId;
                 this.players.set(p.id, player);
             }
@@ -163,6 +156,7 @@ class Database {
                 event.sharedAccess = e.sharedAccess || [];
                 for (const p of e.players) {
                     const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id);
+                    player.nickName = p.nickName;
                     if (!this.players.has(player.id)) {
                         player.ownerId = p.ownerId;
                         this.players.set(player.id, player);

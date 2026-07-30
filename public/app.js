@@ -58,18 +58,22 @@ function buildNickNameMap(players) {
     }
     const map = new Map();
     map.set('__key__', key);
-    const shuffled = [...players];
-    for (let i = shuffled.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-    }
-    shuffled.forEach((p, i) => map.set(p.id, String.fromCharCode(65 + i)));
+    players.forEach(p => map.set(p.id, p.nickName || ''));
     currentNickNameMap = map;
     return map;
 }
 
 function getPlayerNickName(playerId, nickNameMap) {
     return nickNameMap.get(playerId) || '';
+}
+
+function sortPlayersByNickName(players, nickNameMap) {
+    return [...players].sort((a, b) => {
+        const nickA = nickNameMap.get(a.id) || a.nickName || '';
+        const nickB = nickNameMap.get(b.id) || b.nickName || '';
+        if (nickA !== nickB) return nickA.localeCompare(nickB);
+        return a.name.localeCompare(b.name);
+    });
 }
 
 function getPlayerLabel(player, nickNameMap, showNickNames) {
@@ -720,40 +724,6 @@ async function loadEventDetail(eventId, fromShare = false) {
             }
         }
 
-        const playersList = document.getElementById('players-list');
-        const playersToggle = document.getElementById('players-toggle');
-        if (playersList && playersToggle) {
-            const storageKey = `gm_event_${eventId}_players_collapsed`;
-            const stored = localStorage.getItem(storageKey);
-            if (stored !== null) {
-                const shouldCollapse = stored === 'true';
-                if (shouldCollapse) {
-                    playersList.classList.add('players-section-collapsed');
-                } else {
-                    playersList.classList.remove('players-section-collapsed');
-                }
-                playersToggle.innerHTML = `Players ${shouldCollapse ? '&#9662;' : '&#9652;'}`;
-            }
-        }
-
-        const completedGamesList = document.getElementById('completed-games-list');
-        const completedGamesToggle = document.getElementById('completed-games-toggle');
-        if (completedGamesList && completedGamesToggle) {
-            const storageKey = `gm_event_${eventId}_gamestats_collapsed`;
-            const stored = localStorage.getItem(storageKey);
-            if (stored !== null) {
-                const shouldCollapse = stored === 'true';
-                if (shouldCollapse) {
-                    completedGamesList.classList.add('completed-games-collapsed');
-                } else {
-                    completedGamesList.classList.remove('completed-games-collapsed');
-                }
-                completedGamesToggle.innerHTML = `Game Stats ${shouldCollapse ? '&#9662;' : '&#9652;'}`;
-            } else if (!status.isEnded) {
-                completedGamesList.classList.add('completed-games-collapsed');
-            }
-        }
-
         if (status.isStarted && !status.isEnded && accessMode !== 'moderator') {
             const endBtn = document.createElement('div');
             endBtn.style.cssText = 'text-align:center; margin-top:20px; padding-bottom:20px;';
@@ -762,6 +732,7 @@ async function loadEventDetail(eventId, fromShare = false) {
         }
 
         bindEventDetailActions(eventId, event, status);
+        bindCollapsibleSections(eventId, status);
 
         const actionsEl = document.getElementById('event-actions');
         if (actionsEl && event.ownerId === (currentUser?.id || '')) {
@@ -892,15 +863,16 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
     const away = status.players.filter(p => p.status === 'AWAY');
     const retired = status.players.filter(p => p.status === 'RETIRED');
     const fulfilled = status.players.filter(p => p.status === 'FULLFILLED');
+    const nickNameMap = buildNickNameMap(status.players);
 
     const renderPlayerGroup = (title, players, showActions) => {
         if (!players.length) return '';
-        const nickNameMap = buildNickNameMap(status.players);
+        const sorted = sortPlayersByNickName(players, nickNameMap);
         return `
             <div class="player-group">
                 <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
                 <div class="player-group-content">
-                    ${players.map(p => `
+                    ${sorted.map(p => `
                         <div class="player-row">
                             <div class="player-info">
                                 <div class="player-name">${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
@@ -947,7 +919,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                 <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
                 <select id="completed-games-player-filter" class="player-filter-select">
                     <option value="">All Players</option>
-                    ${(() => { const nickNameMap = buildNickNameMap(status.players); return status.players.map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''); })()}
+                    ${(() => sortPlayersByNickName(status.players, nickNameMap).map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''))()}
                 </select>
             </div>
             <div id="completed-games-list">
@@ -1021,16 +993,18 @@ function renderPlayedWithCard(event) {
 
     return `
         <div class="card">
-            <div class="card-title" style="font-size:16px;">Who Played with Who</div>
-            <div class="played-with-matrix-container">
-                <table class="played-with-matrix">
-                    <thead>
-                        <tr><th></th>${headerCells}</tr>
-                    </thead>
-                    <tbody>
-                        ${rows}
-                    </tbody>
-                </table>
+            <div class="card-title" style="font-size:16px; cursor:pointer;" id="played-with-toggle">Who Played with Who &#9662;</div>
+            <div id="played-with-list">
+                <div class="played-with-matrix-container">
+                    <table class="played-with-matrix">
+                        <thead>
+                            <tr><th></th>${headerCells}</tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     `;
@@ -1054,6 +1028,60 @@ function togglePlayerGroup(header) {
         const isHidden = content.style.display === 'none';
         content.style.display = isHidden ? 'block' : 'none';
         header.innerHTML = header.innerHTML.replace(/ \&#9662;| \&#9652;/, '') + (isHidden ? ' &#9662;' : ' &#9652;');
+    }
+}
+
+function bindCollapsibleSections(eventId, status) {
+    const sections = [
+        {
+            listId: 'players-list',
+            toggleId: 'players-toggle',
+            collapsedClass: 'players-section-collapsed',
+            storageKey: `gm_event_${eventId}_players_collapsed`,
+            label: 'Players',
+            defaultCollapsed: status.isStarted ? true : null,
+        },
+        {
+            listId: 'completed-games-list',
+            toggleId: 'completed-games-toggle',
+            collapsedClass: 'completed-games-collapsed',
+            storageKey: `gm_event_${eventId}_gamestats_collapsed`,
+            label: 'Game Stats',
+            defaultCollapsed: !status.isEnded ? true : null,
+        },
+        {
+            listId: 'played-with-list',
+            toggleId: 'played-with-toggle',
+            collapsedClass: 'played-with-collapsed',
+            storageKey: `gm_event_${eventId}_playedwith_collapsed`,
+            label: 'Who Played with Who',
+            defaultCollapsed: null,
+        },
+    ];
+
+    for (const section of sections) {
+        const list = document.getElementById(section.listId);
+        const toggle = document.getElementById(section.toggleId);
+        if (!list || !toggle) continue;
+
+        const stored = localStorage.getItem(section.storageKey);
+        let isCollapsed;
+        if (stored !== null) {
+            isCollapsed = stored === 'true';
+        } else if (section.defaultCollapsed !== null) {
+            isCollapsed = section.defaultCollapsed;
+        } else {
+            isCollapsed = list.classList.contains(section.collapsedClass);
+        }
+
+        list.classList.toggle(section.collapsedClass, isCollapsed);
+        toggle.innerHTML = `${section.label} ${isCollapsed ? '&#9662;' : '&#9652;'}`;
+
+        toggle.addEventListener('click', () => {
+            const collapsed = list.classList.toggle(section.collapsedClass);
+            toggle.innerHTML = `${section.label} ${collapsed ? '&#9662;' : '&#9652;'}`;
+            localStorage.setItem(section.storageKey, String(collapsed));
+        });
     }
 }
 
@@ -1412,31 +1440,11 @@ function bindEventDetailActions(eventId, event, status) {
         });
     });
 
-    const completedGamesList = document.getElementById('completed-games-list');
-    const completedGamesToggle = document.getElementById('completed-games-toggle');
-    if (completedGamesList && completedGamesToggle) {
-        completedGamesToggle.addEventListener('click', () => {
-            const isCollapsed = completedGamesList.classList.toggle('completed-games-collapsed');
-            completedGamesToggle.innerHTML = `Game Stats ${isCollapsed ? '&#9662;' : '&#9652;'}`;
-            localStorage.setItem(`gm_event_${eventId}_gamestats_collapsed`, String(isCollapsed));
-        });
-    }
-
     const completedGamesFilter = document.getElementById('completed-games-player-filter');
     if (completedGamesFilter) {
         completedGamesFilter.addEventListener('change', (e) => {
             currentCompletedGamesFilter = e.target.value;
             loadEventDetail(eventId);
-        });
-    }
-
-    const playersList = document.getElementById('players-list');
-    const playersToggle = document.getElementById('players-toggle');
-    if (playersList && playersToggle) {
-        playersToggle.addEventListener('click', () => {
-            const isCollapsed = playersList.classList.toggle('players-section-collapsed');
-            playersToggle.innerHTML = `Players ${isCollapsed ? '&#9662;' : '&#9652;'}`;
-            localStorage.setItem(`gm_event_${eventId}_players_collapsed`, String(isCollapsed));
         });
     }
 }

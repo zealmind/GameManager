@@ -16,7 +16,7 @@ function prepareEventResponse(event) {
         startedAt: event.startedAt,
         endedAt: event.endedAt,
         ownerId: ev.ownerId,
-        players: Array.from(event.players.values()).map((p) => ({ id: p.id, name: p.name, ownerId: p.ownerId })),
+        players: Array.from(event.players.values()).map((p) => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId })),
         registrations: Array.from(event.registrations.values()),
         games: event.games,
         gameHistory: event.gameHistory,

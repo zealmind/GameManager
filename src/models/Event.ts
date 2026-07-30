@@ -38,15 +38,42 @@ export class Event {
     return !!this.endedAt;
   }
 
-  start(): void {
-    if (this.isStarted()) return;
-    this.startedAt = new Date();
-    for (const reg of this.registrations.values()) {
-      if (reg.status !== 'RETIRED') {
-        reg.status = 'WAITING';
-      }
-    }
-  }
+start(): void {
+     if (this.isStarted()) return;
+     this.startedAt = new Date();
+     for (const reg of this.registrations.values()) {
+       if (reg.status !== 'RETIRED') {
+         reg.status = 'WAITING';
+       }
+     }
+     this.assignNickNames();
+   }
+
+   assignNickNames(): void {
+     const usedLetters = new Set(
+       Array.from(this.players.values())
+         .map(p => p.nickName)
+         .filter((n): n is string => !!n)
+     );
+     const unassigned = Array.from(this.players.values()).filter(p => !p.nickName);
+     if (unassigned.length === 0) return;
+
+     let nextCode = 65;
+     const nextLetter = (): string => {
+       while (usedLetters.has(String.fromCharCode(nextCode))) nextCode++;
+       const letter = String.fromCharCode(nextCode);
+       usedLetters.add(letter);
+       nextCode++;
+       return letter;
+     };
+
+     const shuffled = [...unassigned];
+     for (let i = shuffled.length - 1; i > 0; i--) {
+       const j = Math.floor(Math.random() * (i + 1));
+       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+     }
+     shuffled.forEach(p => { p.nickName = nextLetter(); });
+   }
 
   // Player registration
   addPlayer(player: Player): void {

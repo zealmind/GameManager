@@ -287,6 +287,12 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
   try {
     const event = req.event;
 
+    const players = Array.from(event.players.values()) as Array<{ nickName?: string }>;
+    if (event.isStarted() && players.some(p => !p.nickName)) {
+      event.assignNickNames();
+      await db.persist();
+    }
+
     const avgGames = event.getAverageGamesPlayed();
     const availablePlayers = event.getAvailablePlayers();
     const playingPlayersCount = Array.from(event.registrations.values()).filter((r: any) => r.status === 'PLAYING').length;
@@ -350,6 +356,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
         return {
           id: p.id,
           name: p.name,
+          nickName: p.nickName,
           gamesPlayed: reg?.gamesPlayedCount || 0,
           targetGames: reg?.targetGames || 0,
           status: reg?.status || 'UNKNOWN',

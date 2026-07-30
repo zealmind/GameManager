@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 export class Player {
   id: string;
   name: string;
+  nickName?: string;
 
   constructor(name: string, id?: string) {
     this.id = id || randomUUID();

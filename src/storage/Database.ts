@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 interface SerializedPlayer {
   id: string;
   name: string;
+  nickName?: string;
   ownerId?: string;
 }
 
@@ -142,7 +143,7 @@ export class Database {
   }
 
   public async persist(): Promise<void> {
-    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, ownerId: (p as any).ownerId }));
+    const playersData = Array.from(this.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId }));
     const eventsData = Array.from(this.events.values()).map<SerializedEvent>(e => ({
       id: e.id,
       name: e.name,
@@ -151,7 +152,7 @@ export class Database {
       startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
       endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
       ownerId: (e as any).ownerId || '',
-      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, ownerId: (p as any).ownerId })),
+      players: Array.from(e.players.values()).map<SerializedPlayer>(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: (p as any).ownerId })),
       registrations: Array.from(e.registrations.values()),
       games: e.games.map<SerializedGame>(g => ({
         ...g,
@@ -193,16 +194,8 @@ export class Database {
       if (!data) return;
 
       for (const p of data.players) {
-        delete (p as any).nickName;
-      }
-      for (const e of data.events) {
-        for (const p of (e.players || [])) {
-          delete (p as any).nickName;
-        }
-      }
-
-      for (const p of data.players) {
         const player = new Player(p.name, p.id);
+        player.nickName = p.nickName;
         (player as any).ownerId = p.ownerId;
         this.players.set(p.id, player);
       }
@@ -217,6 +210,7 @@ export class Database {
 
         for (const p of e.players) {
           const player = this.players.get(p.id) || new Player(p.name, p.id);
+          player.nickName = p.nickName;
           if (!this.players.has(player.id)) {
             (player as any).ownerId = p.ownerId;
             this.players.set(player.id, player);

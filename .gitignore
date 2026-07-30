@@ -4,3 +4,4 @@ db.json
 
 .vercel
 .env
+backup.sql

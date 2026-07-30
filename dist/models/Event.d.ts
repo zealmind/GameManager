@@ -23,6 +23,7 @@ export declare class Event {
     isStarted(): boolean;
     isEnded(): boolean;
     start(): void;
+    assignNickNames(): void;
     addPlayer(player: Player): void;
     removePlayer(playerId: string): void;
     getPlayer(playerId: string): Player | undefined;

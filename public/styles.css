@@ -696,6 +696,10 @@ html, body {
 }
 
 /* Completed games collapsible */
+.played-with-collapsed {
+    display: none;
+}
+
 .completed-games-collapsed {
     display: none;
 }
