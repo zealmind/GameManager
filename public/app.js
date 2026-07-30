@@ -1100,7 +1100,7 @@ function renderPlayedWithCard(event) {
                 <div class="card-title" style="font-size:16px; cursor:pointer; margin:0; flex:1;" id="played-with-toggle">Who Played with Who &#9662;</div>
                 <button type="button" class="btn btn-sm btn-secondary played-with-expand-btn" id="played-with-expand" title="Expand full screen" aria-label="Expand Who Played with Who">⛶</button>
             </div>
-            <div id="played-with-list">
+            <div id="played-with-list" class="played-with-collapsed">
                 <div class="played-with-matrix-container">
                     ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: false })}
                 </div>
@@ -1263,7 +1263,7 @@ function bindCollapsibleSections(eventId, status) {
             collapsedClass: 'played-with-collapsed',
             storageKey: `gm_event_${eventId}_playedwith_collapsed`,
             label: 'Who Played with Who',
-            defaultCollapsed: null,
+            defaultCollapsed: status.isStarted ? true : null,
         },
     ];
 
