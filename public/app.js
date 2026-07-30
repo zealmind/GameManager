@@ -817,14 +817,15 @@ async function loadEventDetail(eventId, fromShare = false) {
         const actionsEl = document.getElementById('event-actions');
         if (actionsEl && event.ownerId === (currentUser?.id || '')) {
             actionsEl.innerHTML = `
-                <button class="btn btn-sm btn-secondary" id="share-view-btn">Share View</button>
-                <button class="btn btn-sm btn-secondary" id="share-moderate-btn">Invite Moderator</button>
+                <button class="btn btn-sm btn-secondary" id="share-view-btn">Share</button>
+                <button class="btn btn-sm btn-secondary" id="share-moderate-btn">Organize</button>
+                <button class="btn btn-sm btn-secondary" id="download-excel-btn" title="Download Excel">Download</button>
             `;
-            document.getElementById('share-view-btn')?.addEventListener('click', () => {
-    console.log('Share View clicked');
-    openShareModal(eventId, 'viewer');
-});
+            document.getElementById('share-view-btn')?.addEventListener('click', () => openShareModal(eventId, 'viewer'));
             document.getElementById('share-moderate-btn')?.addEventListener('click', () => openShareModal(eventId, 'moderator'));
+            document.getElementById('download-excel-btn')?.addEventListener('click', () => {
+                downloadEventExcel(event, status, completedGames);
+            });
         }
     } catch (err) {
         app.innerHTML = `<div class="empty-state"><p class="text-danger">Failed to load event</p><p class="text-muted">${escapeHtml(err.message)}</p></div>`;
@@ -1304,19 +1305,15 @@ function formatDuration(ms) {
 }
 
 function randomValidScore() {
-    const score1 = 11 + Math.floor(Math.random() * 6); // 11-16
-    const max2 = Math.max(0, score1 - 2);
-    const score2 = Math.floor(Math.random() * (max2 + 1)); // 0 to max2
-    return [score1, score2];
+    // Winner at 11; opponent stays at 10 or less
+    const winner = 11;
+    const loser = Math.floor(Math.random() * 11); // 0–10
+    return Math.random() < 0.5 ? [winner, loser] : [loser, winner];
 }
 
-function renderLeaderboard(status, completedGames) {
-    if (!status.players || !status.players.length) {
-        return '<div class="text-muted">No players yet</div>';
-    }
-
+function computeLeaderboardStats(status, completedGames) {
     const stats = {};
-    for (const p of status.players) {
+    for (const p of (status.players || [])) {
         stats[p.id] = { wins: 0, scoreDiff: 0 };
     }
 
@@ -1340,7 +1337,7 @@ function renderLeaderboard(status, completedGames) {
         }
     }
 
-    const sorted = [...status.players].filter(p => p.gamesPlayed > 0).sort((a, b) => {
+    const sorted = [...(status.players || [])].filter(p => p.gamesPlayed > 0).sort((a, b) => {
         const wa = stats[a.id]?.wins || 0;
         const wb = stats[b.id]?.wins || 0;
         if (wb !== wa) return wb - wa;
@@ -1348,6 +1345,16 @@ function renderLeaderboard(status, completedGames) {
         const db = stats[b.id]?.scoreDiff || 0;
         return db - da;
     });
+
+    return { stats, sorted };
+}
+
+function renderLeaderboard(status, completedGames) {
+    if (!status.players || !status.players.length) {
+        return '<div class="text-muted">No players yet</div>';
+    }
+
+    const { stats, sorted } = computeLeaderboardStats(status, completedGames);
     if (!sorted.length) {
         return '<div class="text-muted">No players have played any games yet</div>';
     }
@@ -1376,6 +1383,173 @@ function renderLeaderboard(status, completedGames) {
             }).join('')}
         </div>
     `;
+}
+
+function escapeXml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+}
+
+function excelCell(value, type = 'String') {
+    if (value === null || value === undefined || value === '') {
+        return '<Cell/>';
+    }
+    return `<Cell><Data ss:Type="${type}">${escapeXml(value)}</Data></Cell>`;
+}
+
+function excelRow(cells) {
+    return `<Row>${cells.join('')}</Row>`;
+}
+
+function resolvePlayerNamePlain(playerId, players) {
+    const player = (players || []).find(p => p.id === playerId);
+    return player?.name || playerId.slice(0, 8);
+}
+
+function buildLeaderBoardSheetRows(status, completedGames) {
+    const players = status.players || [];
+    const playerMap = new Map(players.map(p => [p.id, p]));
+    const { stats, sorted } = computeLeaderboardStats(status, completedGames);
+    const header = excelRow([
+        excelCell('Rank'),
+        excelCell('Player'),
+        excelCell('Games'),
+        excelCell('Wins'),
+        excelCell('Score Diff'),
+        excelCell('Partners'),
+    ]);
+    const rows = sorted.map((p, idx) => {
+        const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
+        const partnersStr = (p.partnerIds || [])
+            .map(pid => playerMap.get(pid)?.name)
+            .filter(Boolean)
+            .join(', ') || 'None';
+        return excelRow([
+            excelCell(idx + 1, 'Number'),
+            excelCell(p.name),
+            excelCell(p.gamesPlayed || 0, 'Number'),
+            excelCell(s.wins, 'Number'),
+            excelCell(s.scoreDiff, 'Number'),
+            excelCell(partnersStr),
+        ]);
+    });
+    return [header, ...rows];
+}
+
+function buildGameStatsSheetRows(status, completedGames) {
+    const players = status.players || [];
+    const header = excelRow([
+        excelCell('Game #'),
+        excelCell('Court'),
+        excelCell('Team 1'),
+        excelCell('Team 2'),
+        excelCell('Score'),
+        excelCell('Start'),
+        excelCell('End'),
+        excelCell('Duration'),
+    ]);
+    const rows = (completedGames || []).map(g => {
+        const team1 = (g.players?.team1 || []).map(id => resolvePlayerNamePlain(id, players)).join(', ');
+        const team2 = (g.players?.team2 || []).map(id => resolvePlayerNamePlain(id, players)).join(', ');
+        const score = `${g.scores?.[0] || 0}-${g.scores?.[1] || 0}`;
+        const start = g.startedAt ? new Date(g.startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const end = g.completedAt ? new Date(g.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+        const duration = (g.startedAt && g.completedAt)
+            ? formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())
+            : '';
+        return excelRow([
+            excelCell(g.gameNumber || '', 'Number'),
+            excelCell(g.courtId || '', 'Number'),
+            excelCell(team1),
+            excelCell(team2),
+            excelCell(score),
+            excelCell(start),
+            excelCell(end),
+            excelCell(duration),
+        ]);
+    });
+    return [header, ...rows];
+}
+
+function buildPlayedWithSheetRows(event) {
+    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+    const playerMap = new Map(players.map(p => [p.id, p]));
+
+    // Reorder by full name for the spreadsheet (no nicknames)
+    const order = [...playerIds].sort((a, b) => {
+        const nameA = playerMap.get(a)?.name || '';
+        const nameB = playerMap.get(b)?.name || '';
+        return nameA.localeCompare(nameB);
+    });
+    const indexMap = new Map(playerIds.map((id, i) => [id, i]));
+    const labels = order.map(id => playerMap.get(id)?.name || id.slice(0, 8));
+
+    const header = excelRow([
+        excelCell(''),
+        ...labels.map(label => excelCell(label)),
+    ]);
+    const rows = order.map((rowId, i) => {
+        const cells = [
+            excelCell(labels[i]),
+            ...order.map((colId) => {
+                if (rowId === colId) return excelCell('-');
+                const ri = indexMap.get(rowId);
+                const ci = indexMap.get(colId);
+                return excelCell(matrix[ri][ci], 'Number');
+            }),
+        ];
+        return excelRow(cells);
+    });
+    return [header, ...rows];
+}
+
+function buildExcelWorkbookXml(sheets) {
+    const worksheets = sheets.map(sheet => `
+ <Worksheet ss:Name="${escapeXml(sheet.name)}">
+  <Table>
+${sheet.rows.join('\n')}
+  </Table>
+ </Worksheet>`).join('');
+
+    return `<?xml version="1.0"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+${worksheets}
+</Workbook>`;
+}
+
+function sanitizeFileName(name) {
+    return String(name || 'event')
+        .replace(/[<>:"/\\|?*\x00-\x1F]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .slice(0, 80) || 'event';
+}
+
+function downloadEventExcel(event, status, completedGames) {
+    const xml = buildExcelWorkbookXml([
+        { name: 'Leader Board', rows: buildLeaderBoardSheetRows(status, completedGames) },
+        { name: 'Game Stats', rows: buildGameStatsSheetRows(status, completedGames) },
+        { name: 'Who Played with Who', rows: buildPlayedWithSheetRows(event) },
+    ]);
+
+    const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${sanitizeFileName(event.name)}-stats.xls`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Excel downloaded');
 }
 
 function bindEventDetailActions(eventId, event, status) {
@@ -2133,7 +2307,7 @@ function openShareModal(eventId, permission) {
     const error = document.getElementById('share-error');
     if (!overlay) return;
 
-    title.textContent = permission === 'moderator' ? 'Invite Moderator' : 'Share Event';
+    title.textContent = permission === 'moderator' ? 'Organize' : 'Share';
     input.value = 'Loading...';
     input.disabled = true;
     copyBtn.disabled = true;
