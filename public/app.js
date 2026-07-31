@@ -390,6 +390,57 @@ function clearWelcomeError() {
     el.classList.add('hidden');
 }
 
+function setEnterBtnLoading(loading) {
+    const btn = document.getElementById('enter-btn');
+    if (!btn) return;
+    if (loading) {
+        btn.textContent = 'Loading...';
+        btn.disabled = true;
+        btn.classList.add('loading');
+        btn.setAttribute('aria-busy', 'true');
+    } else {
+        btn.disabled = false;
+        btn.classList.remove('loading');
+        btn.removeAttribute('aria-busy');
+    }
+}
+
+/**
+ * Poll the backend until it responds so Render cold starts can finish
+ * before auth/share checks run.
+ */
+async function waitForBackend() {
+    if (!API_BASE || API_BASE === 'null') {
+        throw new Error('Cannot connect — open via http://localhost:4444');
+    }
+
+    const maxAttempts = 4;
+    const attemptTimeoutMs = 30000;
+    const retryDelayMs = 2000;
+
+    setEnterBtnLoading(true);
+    setDebug('Connecting to server...');
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            setDebug(attempt === 1
+                ? 'Waking up server...'
+                : `Still connecting... (try ${attempt})`);
+            console.log('[welcome] backend ping', { attempt, API_BASE });
+            await api(`${API_BASE}/api`, { timeoutMs: attemptTimeoutMs });
+            console.log('[welcome] backend ready');
+            setDebug('Server ready');
+            return;
+        } catch (err) {
+            console.warn(`[welcome] backend ping attempt ${attempt} failed:`, err.message);
+            if (attempt >= maxAttempts) {
+                throw new Error('Server unavailable — please try again');
+            }
+            await new Promise(resolve => setTimeout(resolve, retryDelayMs));
+        }
+    }
+}
+
 async function handleInvalidShareAccess(err, mode) {
     clearAccessMode();
     clearShareParamsFromUrl();
@@ -400,7 +451,7 @@ async function handleInvalidShareAccess(err, mode) {
     await checkAuthState();
 }
 
-function initWelcomeScreen() {
+async function initWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
     const btn = document.getElementById('enter-btn');
@@ -408,38 +459,20 @@ function initWelcomeScreen() {
     if (!screen || !video || !btn) return;
 
     const access = getAccessMode();
+    let videoPlayBlocked = false;
 
     console.log('[welcome] init start', { API_BASE, hasToken: !!getToken(), accessMode: access?.mode });
 
+    setEnterBtnLoading(true);
     video.muted = true;
     video.volume = 0;
     video.play().catch(() => {
         console.log('[welcome] video autoplay blocked');
-        btn.textContent = '▶ Play & Enter';
+        videoPlayBlocked = true;
     });
 
-    if (access) {
-        setAccessMode(access.mode, access.token);
-        btn.textContent = 'Enter Site';
-        setDebug(access.mode === 'moderator' ? 'Checking moderator invite...' : 'Checking share link...');
-        screen.classList.add('active');
-        api(`${API_BASE}/share/${access.token}`, { timeoutMs: 4000 })
-            .then(() => {
-                clearWelcomeError();
-                setDebug(access.mode === 'moderator'
-                    ? 'Moderator access — no login required'
-                    : 'Shared access — no login required');
-            })
-            .catch(err => {
-                console.error('[welcome] share validation on init failed:', err);
-                handleInvalidShareAccess(err, access.mode);
-            });
-    } else {
-        clearWelcomeError();
-        checkAuthState();
-    }
-
     btn.onclick = async () => {
+        if (btn.disabled || btn.classList.contains('loading')) return;
         console.log('[welcome] button clicked', { isLoggedIn: isLoggedIn(), accessMode, accessToken });
         if (btn.textContent === 'Enter Site' || btn.textContent === '▶ Play & Enter') {
             if (accessToken) {
@@ -461,12 +494,61 @@ function initWelcomeScreen() {
                 dismissWelcomeScreen();
                 switchView('dashboard');
             }
+        } else if (btn.textContent === 'Retry') {
+            clearWelcomeError();
+            await finishWelcomeReady(access, videoPlayBlocked);
         } else {
             clearWelcomeError();
             btn.classList.add('hidden');
             showLoginModal();
         }
     };
+
+    await finishWelcomeReady(access, videoPlayBlocked);
+}
+
+async function finishWelcomeReady(access, videoPlayBlocked) {
+    const btn = document.getElementById('enter-btn');
+    const screen = document.getElementById('welcome-screen');
+    if (!btn || !screen) return;
+
+    try {
+        await waitForBackend();
+    } catch (err) {
+        console.error('[welcome] backend warm-up failed:', err);
+        setEnterBtnLoading(false);
+        btn.textContent = 'Retry';
+        setDebug(err.message || 'Server unavailable');
+        showWelcomeError('Server is starting up or unavailable. Tap Retry.');
+        return;
+    }
+
+    clearWelcomeError();
+
+    if (access) {
+        setAccessMode(access.mode, access.token);
+        setDebug(access.mode === 'moderator' ? 'Checking moderator invite...' : 'Checking share link...');
+        screen.classList.add('active');
+        try {
+            await api(`${API_BASE}/share/${access.token}`, { timeoutMs: 8000 });
+            clearWelcomeError();
+            setEnterBtnLoading(false);
+            btn.textContent = videoPlayBlocked ? '▶ Play & Enter' : 'Enter Site';
+            setDebug(access.mode === 'moderator'
+                ? 'Moderator access — no login required'
+                : 'Shared access — no login required');
+        } catch (err) {
+            console.error('[welcome] share validation on init failed:', err);
+            await handleInvalidShareAccess(err, access.mode);
+        }
+        return;
+    }
+
+    clearWelcomeError();
+    await checkAuthState();
+    if (videoPlayBlocked && btn.textContent === 'Enter Site') {
+        btn.textContent = '▶ Play & Enter';
+    }
 }
 
 function setDebug(msg) {
@@ -478,7 +560,6 @@ function setDebug(msg) {
 
 async function checkAuthState() {
     const btn = document.getElementById('enter-btn');
-    const debug = document.getElementById('auth-debug');
     if (!btn) return;
 
     const token = getToken();
@@ -486,6 +567,7 @@ async function checkAuthState() {
 
     if (!token) {
         console.log('[auth] no token -> Login/Sign Up');
+        setEnterBtnLoading(false);
         btn.textContent = 'Login / Sign Up';
         setDebug('No session found');
         return;
@@ -493,6 +575,7 @@ async function checkAuthState() {
 
     if (!API_BASE || API_BASE === 'null') {
         console.log('[auth] no API_BASE -> Login/Sign Up');
+        setEnterBtnLoading(false);
         btn.textContent = 'Login / Sign Up';
         setDebug('Cannot connect — open via http://localhost:4444');
         return;
@@ -501,14 +584,16 @@ async function checkAuthState() {
     try {
         setDebug('Verifying session...');
         console.log('[auth] calling /auth/me at', `${API_BASE}/auth/me`);
-        const user = await api(`${API_BASE}/auth/me`, { timeoutMs: 4000 });
+        const user = await api(`${API_BASE}/auth/me`, { timeoutMs: 8000 });
         console.log('[auth] session valid', user.user.name);
         setUser(user.user);
+        setEnterBtnLoading(false);
         btn.textContent = 'Enter Site';
         setDebug(`Logged in as ${user.user.name}`);
     } catch (err) {
         console.warn('[auth] session check failed:', err.message);
         clearUser();
+        setEnterBtnLoading(false);
         btn.textContent = 'Login / Sign Up';
         setDebug(`Session invalid: ${err.message}`);
     }

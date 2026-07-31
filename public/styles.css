@@ -936,12 +936,19 @@ html, body {
     font-weight: 700;
     cursor: pointer;
     letter-spacing: 0.5px;
-    transition: background 0.2s, transform 0.15s;
+    transition: background 0.2s, transform 0.15s, opacity 0.2s;
 }
 
-.enter-btn:active {
+.enter-btn:active:not(:disabled) {
     transform: translate(-50%, -50%) scale(0.96);
     background: rgba(0,0,0,0.6);
+}
+
+.enter-btn:disabled,
+.enter-btn.loading {
+    cursor: wait;
+    opacity: 0.75;
+    pointer-events: none;
 }
 
 .welcome-error {
