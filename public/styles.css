@@ -633,12 +633,17 @@ html, body {
 }
 
 .court-game-card.is-editing-score {
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.court-game-card.is-editing-score .game-teams {
+    width: 100%;
+    min-width: 0;
 }
 
 .court-game-card.is-editing-score .court-scores-wrap {
     width: 100%;
-    order: 3;
 }
 
 .court-scores {
@@ -653,11 +658,16 @@ html, body {
     width: 100%;
 }
 
+.court-game-card.is-editing-score .court-score-actions {
+    display: none;
+}
+
 .court-score-actions {
     display: flex;
     flex-direction: row;
     gap: 8px;
     flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .court-score-display {
@@ -698,13 +708,20 @@ html, body {
     gap: 6px;
 }
 
+.score-editor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
 .score-editor {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    width: 100%;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
     padding: 8px;
     background: var(--bg, #f3f4f6);
     border-radius: 10px;
@@ -713,7 +730,8 @@ html, body {
 .score-stepper {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
+    flex-shrink: 0;
 }
 
 .score-team-tag {
@@ -724,13 +742,13 @@ html, body {
 }
 
 .score-step-btn {
-    width: 40px;
-    height: 40px;
+    width: 36px;
+    height: 36px;
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 8px;
     background: var(--card-bg, #fff);
     color: var(--text-primary, #111);
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
     line-height: 1;
     cursor: pointer;
@@ -740,6 +758,7 @@ html, body {
     align-items: center;
     justify-content: center;
     padding: 0;
+    flex-shrink: 0;
 }
 
 .score-step-btn:active {
@@ -748,12 +767,12 @@ html, body {
 }
 
 .score-input {
-    width: 64px;
-    height: 40px;
-    padding: 6px 8px;
+    width: 52px;
+    height: 36px;
+    padding: 4px 6px;
     border: 1px solid var(--border);
-    border-radius: 10px;
-    font-size: 20px;
+    border-radius: 8px;
+    font-size: 18px;
     font-weight: 700;
     text-align: center;
     background: var(--card-bg);
@@ -770,8 +789,49 @@ html, body {
 .score-vs {
     font-weight: 700;
     color: var(--text-secondary);
-    font-size: 20px;
+    font-size: 18px;
     padding: 0 2px;
+    flex-shrink: 0;
+}
+
+.score-confirm-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.score-icon-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-bg, #fff);
+    font-size: 18px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    touch-action: manipulation;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+}
+
+.score-icon-btn:active {
+    transform: scale(0.96);
+}
+
+.score-icon-confirm {
+    color: var(--success);
+    border-color: #bbf7d0;
+    background: #f0fdf4;
+}
+
+.score-icon-discard {
+    color: var(--danger);
+    border-color: #fecaca;
+    background: #fef2f2;
 }
 
 .score-edit-actions {
@@ -783,13 +843,46 @@ html, body {
 }
 
 .completed-game-card.is-editing-score {
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+}
+
+.completed-game-card.is-editing-score .game-teams {
+    width: 100%;
 }
 
 .completed-game-card.is-editing-score .game-score-side {
     width: 100%;
     align-items: stretch;
-    margin-top: 8px;
+    margin-top: 4px;
+}
+
+.completed-game-card.is-editing-score .game-score-edit {
+    min-width: 0;
+    width: 100%;
+}
+
+@media (max-width: 420px) {
+    .score-team-tag {
+        display: none;
+    }
+
+    .score-input {
+        width: 44px;
+        font-size: 16px;
+    }
+
+    .score-step-btn,
+    .score-icon-btn {
+        width: 32px;
+        height: 32px;
+        font-size: 16px;
+    }
+
+    .score-editor {
+        padding: 6px;
+        gap: 4px;
+    }
 }
 
 /* Leaderboard */

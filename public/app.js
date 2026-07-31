@@ -13,6 +13,8 @@ const localGameScores = new Map();
 let editingCompletedScoreGameId = null;
 /** In-progress court score editor currently open (blocks poll refresh). */
 let editingCourtScoreGameId = null;
+/** Snapshot of scores when court editor opened (for discard). */
+let courtScoreEditSnapshot = null;
 
 function getGameLocalScore(gameId, teamIndex) {
     const entry = localGameScores.get(gameId);
@@ -66,6 +68,15 @@ function renderScoreEditor(gameId, score1, score2) {
     `;
 }
 
+function renderScoreConfirmActions(gameId, { confirmClass = 'score-confirm-btn', discardClass = 'score-discard-btn' } = {}) {
+    return `
+        <div class="score-confirm-actions">
+            <button type="button" class="score-icon-btn score-icon-confirm ${confirmClass}" data-game-id="${gameId}" title="Save score" aria-label="Save score">✓</button>
+            <button type="button" class="score-icon-btn score-icon-discard ${discardClass}" data-game-id="${gameId}" title="Cancel" aria-label="Cancel score edit">✕</button>
+        </div>
+    `;
+}
+
 function renderCourtScores(gameId, score1, score2) {
     return `
         <div class="court-scores" data-game-id="${gameId}">
@@ -76,7 +87,10 @@ function renderCourtScores(gameId, score1, score2) {
                 </button>
             </div>
             <div class="court-score-expanded hidden" data-game-id="${gameId}">
-                ${renderScoreEditor(gameId, score1, score2)}
+                <div class="score-editor-row">
+                    ${renderScoreEditor(gameId, score1, score2)}
+                    ${renderScoreConfirmActions(gameId)}
+                </div>
             </div>
             <div class="court-score-actions">
                 <button class="btn btn-success btn-sm end-game-btn" data-game-id="${gameId}">End Game</button>
@@ -101,6 +115,8 @@ function openCourtScoreEditor(gameId) {
     const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
     const scores = card?.querySelector(`.court-scores[data-game-id="${gameId}"]`);
     if (!scores) return;
+    const pair = readScorePairFromEditor(scores, gameId);
+    courtScoreEditSnapshot = { gameId, score1: pair.score1, score2: pair.score2 };
     scores.querySelector('.court-score-compact')?.classList.add('hidden');
     scores.querySelector('.court-score-expanded')?.classList.remove('hidden');
     card?.classList.add('is-editing-score');
@@ -108,27 +124,41 @@ function openCourtScoreEditor(gameId) {
     try { firstInput?.focus(); firstInput?.select(); } catch {}
 }
 
+function applyScorePairToEditor(root, gameId, score1, score2) {
+    const inputs = root.querySelectorAll(`.score-input[data-game-id="${gameId}"]`);
+    if (inputs[0]) inputs[0].value = String(score1);
+    if (inputs[1]) inputs[1].value = String(score2);
+    const valueEl = root.querySelector(`.court-score-compact .court-score-value`);
+    if (valueEl) valueEl.textContent = `${score1}-${score2}`;
+}
+
 async function closeCourtScoreEditor(gameId, { save = true, eventId = null } = {}) {
     const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
     const scores = card?.querySelector(`.court-scores[data-game-id="${gameId}"]`);
     if (scores) {
-        const { score1, score2 } = syncCourtScoreCompactDisplay(scores, gameId);
-        setGameLocalScore(gameId, score1, score2);
-        scores.querySelector('.court-score-expanded')?.classList.add('hidden');
-        scores.querySelector('.court-score-compact')?.classList.remove('hidden');
-        if (save && eventId) {
-            try {
-                await api(`${API_BASE}/events/${eventId}/games/${gameId}/score`, {
-                    method: 'POST',
-                    body: JSON.stringify({ score_team1: score1, score_team2: score2 })
-                });
-                localGameScores.delete(gameId);
-            } catch (err) {
-                // keep local draft on failure
+        if (!save && courtScoreEditSnapshot?.gameId === gameId) {
+            applyScorePairToEditor(scores, gameId, courtScoreEditSnapshot.score1, courtScoreEditSnapshot.score2);
+            setGameLocalScore(gameId, courtScoreEditSnapshot.score1, courtScoreEditSnapshot.score2);
+        } else {
+            const { score1, score2 } = syncCourtScoreCompactDisplay(scores, gameId);
+            setGameLocalScore(gameId, score1, score2);
+            if (save && eventId) {
+                try {
+                    await api(`${API_BASE}/events/${eventId}/games/${gameId}/score`, {
+                        method: 'POST',
+                        body: JSON.stringify({ score_team1: score1, score_team2: score2 })
+                    });
+                    localGameScores.delete(gameId);
+                } catch (err) {
+                    // keep local draft on failure
+                }
             }
         }
+        scores.querySelector('.court-score-expanded')?.classList.add('hidden');
+        scores.querySelector('.court-score-compact')?.classList.remove('hidden');
     }
     card?.classList.remove('is-editing-score');
+    if (courtScoreEditSnapshot?.gameId === gameId) courtScoreEditSnapshot = null;
     if (editingCourtScoreGameId === gameId) editingCourtScoreGameId = null;
 }
 
@@ -160,6 +190,25 @@ function bindScoreEditor(container, eventId, { autoSaveOnBlur = false } = {}) {
             setGameLocalScore(gameId, pair.score1, pair.score2);
             syncCourtScoreCompactDisplay(container.closest('.court-scores') || container, gameId);
         });
+        input.addEventListener('keydown', (e) => {
+            const gameId = input.getAttribute('data-game-id');
+            if (!gameId) return;
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (container.closest('.court-scores')) {
+                    closeCourtScoreEditor(gameId, { save: true, eventId });
+                } else {
+                    container.querySelector(`.save-score-btn[data-game-id="${gameId}"]`)?.click();
+                }
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                if (container.closest('.court-scores')) {
+                    closeCourtScoreEditor(gameId, { save: false });
+                } else {
+                    container.querySelector(`.cancel-score-btn[data-game-id="${gameId}"]`)?.click();
+                }
+            }
+        });
         if (autoSaveOnBlur) {
             input.addEventListener('blur', () => {
                 setTimeout(() => {
@@ -184,17 +233,19 @@ function bindCourtScoreExpand(container, eventId) {
         });
     });
 
-    const onPointerDown = (e) => {
-        if (!editingCourtScoreGameId) return;
-        const scores = document.querySelector(`.court-scores[data-game-id="${editingCourtScoreGameId}"]`);
-        if (scores && scores.contains(e.target)) return;
-        closeCourtScoreEditor(editingCourtScoreGameId, { save: true, eventId });
-    };
-    if (container._courtScoreOutsideHandler) {
-        document.removeEventListener('pointerdown', container._courtScoreOutsideHandler, true);
-    }
-    container._courtScoreOutsideHandler = onPointerDown;
-    document.addEventListener('pointerdown', onPointerDown, true);
+    container.querySelectorAll('.score-confirm-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeCourtScoreEditor(btn.dataset.gameId, { save: true, eventId });
+        });
+    });
+
+    container.querySelectorAll('.score-discard-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            closeCourtScoreEditor(btn.dataset.gameId, { save: false });
+        });
+    });
 }
 
 const app = document.getElementById('main-content');
@@ -326,6 +377,7 @@ function switchView(view) {
     currentEventId = null;
     editingCompletedScoreGameId = null;
     editingCourtScoreGameId = null;
+    courtScoreEditSnapshot = null;
     if (view === 'dashboard') {
         renderDashboard();
     } else if (view === 'events') {
@@ -612,6 +664,7 @@ function logout() {
     localGameScores.clear();
     editingCompletedScoreGameId = null;
     editingCourtScoreGameId = null;
+    courtScoreEditSnapshot = null;
 
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
@@ -1311,10 +1364,9 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                                 <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
                             </div>
                             <div class="game-score-edit${isEditing ? '' : ' hidden'}" data-game-id="${g.id}">
-                                ${renderScoreEditor(g.id, score1, score2)}
-                                <div class="score-edit-actions">
-                                    <button class="btn btn-success btn-sm save-score-btn" data-game-id="${g.id}">Save</button>
-                                    <button class="btn btn-secondary btn-sm cancel-score-btn" data-game-id="${g.id}">Cancel</button>
+                                <div class="score-editor-row">
+                                    ${renderScoreEditor(g.id, score1, score2)}
+                                    ${renderScoreConfirmActions(g.id, { confirmClass: 'save-score-btn', discardClass: 'cancel-score-btn' })}
                                 </div>
                             </div>
                         </div>
@@ -2020,7 +2072,7 @@ function bindEventDetailActions(eventId, event, status) {
         });
 
         container.querySelectorAll('.court-scores').forEach(el => {
-            bindScoreEditor(el, eventId, { autoSaveOnBlur: true });
+            bindScoreEditor(el, eventId, { autoSaveOnBlur: false });
         });
         bindCourtScoreExpand(container, eventId);
 
