@@ -6,6 +6,8 @@ let currentUser = null;
 let accessMode = null; // null | 'viewer' | 'moderator'
 let accessToken = null;
 let eventDetailPollInterval = null;
+/** Prevents overlapping event-detail fetches from stacking during poll. */
+let eventDetailLoadInFlight = false;
 const localGameScores = new Map();
 /** Completed-game score edit panel currently open (blocks poll refresh). */
 let editingCompletedScoreGameId = null;
@@ -320,6 +322,7 @@ function switchView(view) {
         clearInterval(eventDetailPollInterval);
         eventDetailPollInterval = null;
     }
+    eventDetailLoadInFlight = false;
     currentEventId = null;
     editingCompletedScoreGameId = null;
     editingCourtScoreGameId = null;
@@ -917,15 +920,20 @@ async function openEventDetail(eventId, fromShare = false) {
     // Auto-refresh event details every 5 seconds (skip while editing scores)
     if (eventDetailPollInterval) clearInterval(eventDetailPollInterval);
     eventDetailPollInterval = setInterval(() => {
-        if (currentEventId && !isScoreEditingActive()) loadEventDetail(currentEventId);
+        if (currentEventId && !isScoreEditingActive()) {
+            loadEventDetail(currentEventId, false, { silent: true });
+        }
     }, 5000);
 }
 
-async function loadEventDetail(eventId, fromShare = false) {
+async function loadEventDetail(eventId, fromShare = false, options = {}) {
+    const silent = !!options.silent;
+    if (eventDetailLoadInFlight) return;
+    eventDetailLoadInFlight = true;
     try {
         const [event, status] = await Promise.all([
-            api(`${API_BASE}/events/${eventId}`),
-            api(`${API_BASE}/events/${eventId}/status`)
+            api(`${API_BASE}/events/${eventId}`, { timeoutMs: 12000 }),
+            api(`${API_BASE}/events/${eventId}/status`, { timeoutMs: 12000 })
         ]);
 
         const container = document.getElementById('event-detail');
@@ -1009,7 +1017,14 @@ async function loadEventDetail(eventId, fromShare = false) {
             });
         }
     } catch (err) {
+        // Background polls must not wipe the already-rendered event on transient timeouts.
+        if (silent) {
+            console.warn('[poll] event detail refresh failed:', err.message);
+            return;
+        }
         app.innerHTML = `<div class="empty-state"><p class="text-danger">Failed to load event</p><p class="text-muted">${escapeHtml(err.message)}</p></div>`;
+    } finally {
+        eventDetailLoadInFlight = false;
     }
 }
 
