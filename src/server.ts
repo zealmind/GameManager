@@ -57,6 +57,7 @@ app.get('/api', (req, res) => {
       players: {
         create: 'POST /players',
         get: 'GET /players/:playerId',
+        update: 'PATCH /players/:playerId',
         register: 'POST /events/:eventId/players',
         updateStatus: 'PATCH /events/:eventId/players/:playerId'
       },

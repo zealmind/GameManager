@@ -107,7 +107,7 @@ class MockClient {
       if (idx >= 0) this.data.shared_access[idx] = row;
       else this.data.shared_access.push(row);
     } else if (sql.includes('INTO players')) {
-      const row = { id: args[0], name: args[1], nick_name: args[2], owner_id: args[3] };
+      const row = { id: args[0], name: args[1], nick_name: args[2], owner_id: args[3], dupr_id: args[4] ?? null };
       const idx = this.data.players.findIndex(i => i.id === row.id);
       if (idx >= 0) this.data.players[idx] = row;
       else this.data.players.push(row);

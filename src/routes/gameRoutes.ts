@@ -373,6 +373,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
           id: p.id,
           name: p.name,
           nickName: p.nickName,
+          duprId: p.duprId,
           gamesPlayed: reg?.gamesPlayedCount || 0,
           targetGames: reg?.targetGames || 0,
           status: reg?.status || 'UNKNOWN',

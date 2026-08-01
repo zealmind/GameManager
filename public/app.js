@@ -2461,7 +2461,7 @@ async function loadPlayersList() {
             <div class="list-item" data-player-id="${p.id}">
                 <div style="flex:1">
                     <div class="list-item-title">${escapeHtml(p.name)}</div>
-                    <div class="list-item-meta">ID: ${p.id.slice(0,8)}...</div>
+                    <div class="list-item-meta">${p.duprId ? `DUPR: ${escapeHtml(p.duprId)}` : 'No DUPR ID'}</div>
                 </div>
                 <span class="delete-link delete-player-btn" data-player-id="${p.id}">Delete</span>
             </div>
@@ -2471,7 +2471,7 @@ async function loadPlayersList() {
                 if (e.target.classList.contains('delete-player-btn')) return;
                 try {
                     const player = await api(`${API_BASE}/players/${item.dataset.playerId}`);
-                    showToast(`${player.name} (ID: ${player.id.slice(0,8)}...)`);
+                    openEditPlayerModal(player);
                 } catch (err) {
                     showToast(err.message);
                 }
@@ -2510,6 +2510,10 @@ function openCreatePlayerModal() {
                     <label>Player Name</label>
                     <input type="text" name="name" required placeholder="Enter player name">
                 </div>
+                <div class="form-group">
+                    <label>DUPR ID <span class="text-muted">(optional)</span></label>
+                    <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
+                </div>
                 <button type="submit" class="btn btn-primary">Create Player</button>
             </form>
         </div>
@@ -2521,6 +2525,7 @@ function openCreatePlayerModal() {
         e.preventDefault();
         const fd = new FormData(e.target);
         const name = String(fd.get('name') || '').trim();
+        const duprId = String(fd.get('duprId') || '').trim();
         if (!name) return;
         try {
             const existing = await api(`${API_BASE}/players`);
@@ -2529,13 +2534,63 @@ function openCreatePlayerModal() {
                 showToast(`Player "${name}" already exists. Use a different name.`);
                 return;
             }
+            const body = { name };
+            if (duprId) body.duprId = duprId;
             await api(`${API_BASE}/players`, {
                 method: 'POST',
-                body: JSON.stringify({ name })
+                body: JSON.stringify(body)
             });
             overlay.remove();
             loadPlayersList();
             showToast('Player created!');
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function openEditPlayerModal(player) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Player Settings</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="edit-player-form">
+                <div class="form-group">
+                    <label>Player Name</label>
+                    <input type="text" name="name" required placeholder="Enter player name">
+                </div>
+                <div class="form-group">
+                    <label>DUPR ID <span class="text-muted">(optional)</span></label>
+                    <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
+                </div>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    const form = document.getElementById('edit-player-form');
+    form.name.value = player.name || '';
+    form.duprId.value = player.duprId || '';
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const name = String(fd.get('name') || '').trim();
+        const duprId = String(fd.get('duprId') || '').trim();
+        if (!name) return;
+        try {
+            await api(`${API_BASE}/players/${player.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name, duprId })
+            });
+            overlay.remove();
+            loadPlayersList();
+            showToast('Player updated');
         } catch (err) {
             showToast(err.message);
         }
