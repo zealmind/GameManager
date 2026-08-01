@@ -1577,6 +1577,33 @@ function bindPlayedWithExpand(event) {
     });
 }
 
+function bindLeaderboardExpand(eventId) {
+    const board = document.querySelector('#leaderboard-list .leaderboard');
+    const btn = board?.querySelector('.leaderboard-expand-btn');
+    if (!board || !btn) return;
+
+    const storageKey = `gm_event_${eventId}_leaderboard_collapsed`;
+    const restCount = Number(btn.dataset.restCount || 0);
+    const stored = localStorage.getItem(storageKey);
+    // Default collapsed (top 3 only); stored "true" = collapsed, "false" = expanded
+    const isCollapsed = stored === null ? true : stored === 'true';
+
+    board.classList.toggle('leaderboard--expanded', !isCollapsed);
+    btn.setAttribute('aria-expanded', isCollapsed ? 'false' : 'true');
+    btn.innerHTML = isCollapsed
+        ? `Show all ${restCount} more &#9662;`
+        : 'Show top 3 &#9652;';
+
+    btn.addEventListener('click', () => {
+        const expanded = board.classList.toggle('leaderboard--expanded');
+        btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        btn.innerHTML = expanded
+            ? 'Show top 3 &#9652;'
+            : `Show all ${restCount} more &#9662;`;
+        localStorage.setItem(storageKey, String(!expanded));
+    });
+}
+
 function bindCollapsibleSections(eventId, status) {
     const sections = [
         {
@@ -1629,6 +1656,8 @@ function bindCollapsibleSections(eventId, status) {
             localStorage.setItem(section.storageKey, String(collapsed));
         });
     }
+
+    bindLeaderboardExpand(eventId);
 }
 
 function formatDuration(ms) {
@@ -1686,6 +1715,139 @@ function computeLeaderboardStats(status, completedGames) {
     return { stats, sorted };
 }
 
+function getMedalSvg(metal) {
+    const fills = {
+        gold: {
+            discStops: [
+                ['0%', '#ffe082'],
+                ['25%', '#f6c000'],
+                ['45%', '#e6a800'],
+                ['70%', '#ffd54a'],
+                ['100%', '#b7791f'],
+            ],
+            discDark: '#8a5a00',
+            rim: '#8a5a00',
+            star: '#fff8e1',
+            starStroke: '#8a5a00',
+            ribbonL: '#2563eb',
+            ribbonR: '#1e40af',
+            shine: '#ffe9a0',
+            sparkle: '#fff3c4',
+            glitter: true,
+        },
+        silver: {
+            discStops: [
+                ['0%', '#dbe3ec'],
+                ['25%', '#9eabb8'],
+                ['45%', '#7b8794'],
+                ['70%', '#c5ced8'],
+                ['100%', '#5b6570'],
+            ],
+            discDark: '#3f4650',
+            rim: '#3f4650',
+            star: '#eef2f6',
+            starStroke: '#3f4650',
+            ribbonL: '#475569',
+            ribbonR: '#1e293b',
+            shine: '#cfd8e3',
+            sparkle: '#e2e8f0',
+            glitter: true,
+        },
+        bronze: {
+            discStops: [
+                ['0%', '#e8a15a'],
+                ['45%', '#c06a2b'],
+                ['100%', '#7a3f14'],
+            ],
+            discDark: '#5c2e0c',
+            rim: '#5c2e0c',
+            star: '#ffe8cc',
+            starStroke: '#5c2e0c',
+            ribbonL: '#b45309',
+            ribbonR: '#78350f',
+            shine: null,
+            sparkle: null,
+            glitter: false,
+        },
+    };
+    const c = fills[metal];
+    const id = `medal-${metal}`;
+    const discStops = c.discStops
+        .map(([offset, color]) => `<stop offset="${offset}" stop-color="${color}"/>`)
+        .join('');
+
+    return `
+        <svg class="medal-svg${c.glitter ? ' medal-svg--glitter' : ''}" viewBox="0 0 32 40" width="26" height="32" aria-hidden="true" focusable="false">
+            <defs>
+                <linearGradient id="${id}-disc" x1="18%" y1="8%" x2="88%" y2="92%">
+                    ${discStops}
+                </linearGradient>
+                ${c.glitter ? `
+                <linearGradient id="${id}-shine" gradientUnits="userSpaceOnUse" x1="-16" y1="18" x2="8" y2="34">
+                    <stop offset="0" stop-color="${c.shine}" stop-opacity="0"/>
+                    <stop offset="0.45" stop-color="${c.shine}" stop-opacity="0.55"/>
+                    <stop offset="0.55" stop-color="${c.shine}" stop-opacity="0.8"/>
+                    <stop offset="1" stop-color="${c.shine}" stop-opacity="0"/>
+                    <animate attributeName="x1" values="-24;40" dur="2.4s" repeatCount="indefinite"/>
+                    <animate attributeName="x2" values="0;64" dur="2.4s" repeatCount="indefinite"/>
+                </linearGradient>
+                ` : ''}
+            </defs>
+            <path d="M12 1l4 9h-3L9 1h3z" fill="${c.ribbonL}"/>
+            <path d="M20 1l-4 9h3l4-9h-3z" fill="${c.ribbonR}"/>
+            <path d="M13 10l-4 12 5-2.5L16 10z" fill="${c.ribbonL}"/>
+            <path d="M19 10l4 12-5-2.5L16 10z" fill="${c.ribbonR}"/>
+            <circle cx="16" cy="26" r="11" fill="${c.discDark}"/>
+            <circle cx="16" cy="26" r="9.2" fill="url(#${id}-disc)"/>
+            <circle cx="16" cy="26" r="9.2" fill="none" stroke="${c.rim}" stroke-width="1.2"/>
+            ${c.glitter ? `<circle cx="16" cy="26" r="9.2" fill="url(#${id}-shine)"/>` : ''}
+            <path d="M16 20.4l1.55 3.15 3.48.5-2.52 2.45.6 3.45L16 28.2l-3.11 1.65.6-3.45-2.52-2.45 3.48-.5z" fill="${c.star}" stroke="${c.starStroke}" stroke-width="0.6" stroke-linejoin="round"/>
+            ${c.glitter ? `
+            <circle class="medal-sparkle" cx="11.5" cy="21" r="1.15" fill="${c.sparkle}" stroke="${c.rim}" stroke-width="0.35">
+                <animate attributeName="opacity" values="0.15;1;0.15;0.15;1;0.15" dur="2.8s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="medal-sparkle" cx="21" cy="24.5" r="0.95" fill="${c.sparkle}" stroke="${c.rim}" stroke-width="0.35">
+                <animate attributeName="opacity" values="0.15;0.15;1;0.15;0.15;1;0.15" dur="3.2s" repeatCount="indefinite"/>
+            </circle>
+            <circle class="medal-sparkle" cx="15" cy="30.5" r="0.85" fill="${c.sparkle}" stroke="${c.rim}" stroke-width="0.35">
+                <animate attributeName="opacity" values="1;0.15;0.15;1;0.15" dur="2.6s" repeatCount="indefinite"/>
+            </circle>
+            ` : ''}
+        </svg>
+    `;
+}
+
+function getLeaderboardRankBadge(idx) {
+    if (idx === 0) {
+        return `<div class="leaderboard-rank medal medal-gold" title="Gold" aria-label="Gold">${getMedalSvg('gold')}</div>`;
+    }
+    if (idx === 1) {
+        return `<div class="leaderboard-rank medal medal-silver" title="Silver" aria-label="Silver">${getMedalSvg('silver')}</div>`;
+    }
+    if (idx === 2) {
+        return `<div class="leaderboard-rank medal medal-bronze" title="Bronze" aria-label="Bronze">${getMedalSvg('bronze')}</div>`;
+    }
+    return `<div class="leaderboard-rank">${idx + 1}</div>`;
+}
+
+function renderLeaderboardRow(p, idx, stats, nickNameMap, playerStatusMap) {
+    const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
+    const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
+    const playerLabel = getPlayerDisplayName(p, nickNameMap, true, playerStatusMap);
+    const partnersStr = (p.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None';
+    return `
+        <div class="leaderboard-row">
+            ${getLeaderboardRankBadge(idx)}
+            <div class="leaderboard-player">
+                <div class="player-name">${playerLabel}</div>
+                <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${partnersStr}</div>
+            </div>
+            <div class="leaderboard-stat">${s.wins} <span class="text-muted">wins</span></div>
+            <div class="leaderboard-stat">${diffStr} <span class="text-muted">diff</span></div>
+        </div>
+    `;
+}
+
 function renderLeaderboard(status, completedGames) {
     if (!status.players || !status.players.length) {
         return '<div class="text-muted">No players yet</div>';
@@ -1698,26 +1860,25 @@ function renderLeaderboard(status, completedGames) {
 
     const nickNameMap = buildNickNameMap(status.players);
     const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
+    const top = sorted.slice(0, 3);
+    const rest = sorted.slice(3);
+
+    const topHtml = top.map((p, idx) => renderLeaderboardRow(p, idx, stats, nickNameMap, playerStatusMap)).join('');
+    const restHtml = rest.map((p, idx) => renderLeaderboardRow(p, idx + 3, stats, nickNameMap, playerStatusMap)).join('');
 
     return `
         <div class="leaderboard">
-            ${sorted.map((p, idx) => {
-                const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
-                const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
-                const playerLabel = getPlayerDisplayName(p, nickNameMap, true, playerStatusMap);
-                const partnersStr = (p.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None';
-                return `
-                <div class="leaderboard-row">
-                    <div class="leaderboard-rank">${idx + 1}</div>
-                    <div class="leaderboard-player">
-                        <div class="player-name">${playerLabel}</div>
-                        <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${partnersStr}</div>
-                    </div>
-                    <div class="leaderboard-stat">${s.wins} <span class="text-muted">wins</span></div>
-                    <div class="leaderboard-stat">${diffStr} <span class="text-muted">diff</span></div>
-                </div>
-            `;
-            }).join('')}
+            <div class="leaderboard-top">
+                ${topHtml}
+            </div>
+            ${rest.length ? `
+            <div class="leaderboard-rest">
+                ${restHtml}
+            </div>
+            <button type="button" class="leaderboard-expand-btn" data-rest-count="${rest.length}" aria-expanded="false">
+                Show all ${rest.length} more &#9662;
+            </button>
+            ` : ''}
         </div>
     `;
 }
