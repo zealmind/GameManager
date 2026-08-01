@@ -69,7 +69,7 @@ class MockClient {
 
   _buildRow(table, args) {
     if (table === 'players') {
-      return { id: args[0], name: args[1], nickName: args[2] };
+      return { id: args[0], name: args[1], nick_name: args[2], owner_id: args[3], dupr_id: args[4] ?? null };
     }
     if (table === 'events') {
       return { id: args[0], name: args[1], courts: args[2], totalGamesToPlay: args[3], startedAt: args[4] };

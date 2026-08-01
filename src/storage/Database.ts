@@ -52,7 +52,8 @@ export class Database {
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         nick_name TEXT,
-        owner_id TEXT
+        owner_id TEXT,
+        dupr_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
@@ -96,7 +97,17 @@ export class Database {
       );
     `);
 
+    await this.migrateAddDuprId();
     await this.load();
+  }
+
+  /** Add dupr_id to existing players tables that predate the column. */
+  private async migrateAddDuprId(): Promise<void> {
+    try {
+      await this.client.execute('ALTER TABLE players ADD COLUMN dupr_id TEXT');
+    } catch {
+      // column already exists
+    }
   }
 
   private syncRegistrationIndex(event?: Event): void {
@@ -133,8 +144,19 @@ export class Database {
 
   private playerUpsertStmt(player: Player): { sql: string; args: any[] } {
     return {
-      sql: 'INSERT INTO players (id, name, nick_name, owner_id) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, nick_name = excluded.nick_name, owner_id = excluded.owner_id',
-      args: [player.id, player.name, player.nickName ?? null, (player as any).ownerId ?? null],
+      sql: `INSERT INTO players (id, name, nick_name, owner_id, dupr_id) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              nick_name = excluded.nick_name,
+              owner_id = excluded.owner_id,
+              dupr_id = excluded.dupr_id`,
+      args: [
+        player.id,
+        player.name,
+        player.nickName ?? null,
+        player.ownerId ?? null,
+        player.duprId ?? null,
+      ],
     };
   }
 
@@ -302,11 +324,12 @@ export class Database {
       this.events.clear();
       this.eventRegistrations.clear();
 
-      const playerRows = await this.client.execute('SELECT id, name, nick_name, owner_id FROM players');
+      const playerRows = await this.client.execute('SELECT id, name, nick_name, owner_id, dupr_id FROM players');
       for (const row of playerRows.rows as any[]) {
         const player = new Player(row.name as string, row.id as string);
         if (row.nick_name) player.nickName = row.nick_name as string;
-        (player as any).ownerId = row.owner_id ?? undefined;
+        player.ownerId = row.owner_id ?? undefined;
+        if (row.dupr_id) player.duprId = row.dupr_id as string;
         this.players.set(player.id, player);
       }
 
@@ -456,18 +479,46 @@ export class Database {
   }
 
   getPlayersByOwner(ownerId: string): Player[] {
-    return Array.from(this.players.values()).filter((p: any) => p.ownerId === ownerId);
+    return Array.from(this.players.values()).filter(p => p.ownerId === ownerId);
   }
 
-  async createPlayer(name: string, ownerId: string): Promise<Player> {
+  async createPlayer(name: string, ownerId: string, duprId?: string): Promise<Player> {
     for (const p of this.players.values()) {
-      if (p.name === name && (p as any).ownerId === ownerId) {
+      if (p.name === name && p.ownerId === ownerId) {
         throw new Error(`Player "${name}" already exists`);
       }
     }
     const player = new Player(name);
-    (player as any).ownerId = ownerId;
+    player.ownerId = ownerId;
+    if (duprId) player.duprId = duprId;
     this.players.set(player.id, player);
+    await this.savePlayer(player);
+    return player;
+  }
+
+  async updatePlayer(
+    playerId: string,
+    updates: { name?: string; duprId?: string | null }
+  ): Promise<Player | undefined> {
+    const player = this.players.get(playerId);
+    if (!player) return undefined;
+
+    if (updates.name !== undefined) {
+      const trimmed = updates.name.trim();
+      if (!trimmed) throw new Error('Player name cannot be empty');
+      for (const p of this.players.values()) {
+        if (p.id !== playerId && p.name === trimmed && p.ownerId === player.ownerId) {
+          throw new Error(`Player "${trimmed}" already exists`);
+        }
+      }
+      player.name = trimmed;
+    }
+
+    if (updates.duprId !== undefined) {
+      const trimmed = updates.duprId == null ? '' : String(updates.duprId).trim();
+      player.duprId = trimmed || undefined;
+    }
+
     await this.savePlayer(player);
     return player;
   }

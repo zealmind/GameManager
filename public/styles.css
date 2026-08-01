@@ -889,33 +889,96 @@ html, body {
 .leaderboard {
     display: flex;
     flex-direction: column;
+    gap: 6px;
+}
+
+.leaderboard-top,
+.leaderboard-rest {
+    display: flex;
+    flex-direction: column;
     gap: 4px;
+}
+
+.leaderboard-rest {
+    display: none;
+}
+
+.leaderboard--expanded .leaderboard-rest {
+    display: flex;
 }
 
 .leaderboard-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border);
-}
-
-.leaderboard-row:last-child {
-    border-bottom: none;
+    gap: 8px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: transparent;
 }
 
 .leaderboard-rank {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--bg);
     border-radius: 50%;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     color: var(--text-secondary);
     flex-shrink: 0;
+}
+
+.leaderboard-rank.medal {
+    width: 28px;
+    height: 34px;
+    background: transparent;
+    border-radius: 0;
+    box-shadow: none;
+}
+
+.leaderboard-rank.medal .medal-svg {
+    display: block;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28));
+}
+
+.medal-gold .medal-svg--glitter {
+    animation: medal-glitter-gold 2.4s ease-in-out infinite;
+}
+
+.medal-silver .medal-svg--glitter {
+    animation: medal-glitter-silver 2.6s ease-in-out infinite;
+}
+
+@keyframes medal-glitter-gold {
+    0%, 100% {
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28)) drop-shadow(0 0 1px rgba(184, 134, 11, 0.35));
+    }
+    50% {
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 6px rgba(217, 160, 20, 0.7));
+    }
+}
+
+@keyframes medal-glitter-silver {
+    0%, 100% {
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.28)) drop-shadow(0 0 1px rgba(71, 85, 105, 0.35));
+    }
+    50% {
+        filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3)) drop-shadow(0 0 6px rgba(100, 116, 139, 0.65));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .medal-gold .medal-svg--glitter,
+    .medal-silver .medal-svg--glitter {
+        animation: none;
+    }
+
+    .medal-svg--glitter animate {
+        display: none;
+    }
 }
 
 .leaderboard-player {
@@ -938,6 +1001,27 @@ html, body {
     flex-shrink: 0;
     min-width: 38px;
     text-align: right;
+}
+
+.leaderboard-expand-btn {
+    display: block;
+    width: 100%;
+    margin-top: 2px;
+    padding: 8px 10px;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.leaderboard-expand-btn:hover {
+    background: var(--bg);
+    color: var(--text);
+    border-color: var(--text-secondary);
 }
 
 /* Completed games collapsible */

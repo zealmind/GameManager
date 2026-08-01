@@ -18,13 +18,18 @@ function isOwnerOrModerator(event: any, req: any): boolean {
 // POST /players - Create a global player
 router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
-    const { name } = req.body;
+    const { name, duprId } = req.body;
     if (!name) {
       return res.status(400).json({ error: 'Missing required field: name' });
     }
-    const player = await db.createPlayer(name, req.user!.id);
+    const normalizedDuprId =
+      duprId == null || String(duprId).trim() === '' ? undefined : String(duprId).trim();
+    const player = await db.createPlayer(name, req.user!.id, normalizedDuprId);
     res.status(201).json(player);
-  } catch (err) {
+  } catch (err: any) {
+    if (err?.message?.includes('already exists')) {
+      return res.status(409).json({ error: err.message });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -46,11 +51,41 @@ router.get('/:playerId', authenticate, async (req: AuthenticatedRequest, res) =>
     if (!player) {
       return res.status(404).json({ error: 'Player not found' });
     }
-    if ((player as any).ownerId !== req.user!.id) {
+    if (player.ownerId !== req.user!.id) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     res.json(player);
   } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /players/:playerId - Update player details (name, DUPR ID)
+router.patch('/:playerId', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const player = db.getPlayer(req.params.playerId as string);
+    if (!player) {
+      return res.status(404).json({ error: 'Player not found' });
+    }
+    if (player.ownerId !== req.user!.id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    const { name, duprId } = req.body;
+    if (name === undefined && duprId === undefined) {
+      return res.status(400).json({ error: 'Provide at least one of: name, duprId' });
+    }
+
+    const updates: { name?: string; duprId?: string | null } = {};
+    if (name !== undefined) updates.name = name;
+    if (duprId !== undefined) updates.duprId = duprId;
+
+    const updated = await db.updatePlayer(player.id, updates);
+    res.json(updated);
+  } catch (err: any) {
+    if (err?.message?.includes('already exists') || err?.message?.includes('cannot be empty')) {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -70,7 +105,7 @@ router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async
       if (!player) {
         return res.status(404).json({ error: 'Player not found' });
       }
-      const isOwner = req.user && (player as any).ownerId === req.user.id;
+      const isOwner = req.user && player.ownerId === req.user.id;
       const isModerator = req.shareAccess && req.shareAccess.permission === 'moderator';
       if (!isOwner && !isModerator) {
         return res.status(403).json({ error: 'Forbidden' });
@@ -142,7 +177,7 @@ router.delete('/:playerId', authenticate, async (req: AuthenticatedRequest, res)
     if (!player) {
       return res.status(404).json({ error: 'Player not found' });
     }
-    if ((player as any).ownerId !== req.user!.id) {
+    if (player.ownerId !== req.user!.id) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     await db.deletePlayer(req.params.playerId as string);
