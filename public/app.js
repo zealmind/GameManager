@@ -314,8 +314,24 @@ function getPlayerLabel(player, nickNameMap, showNickNames) {
     return nick ? `(${nick}) ` + player.name : player.name;
 }
 
+/** Append " - DUPR ID" when the player has one. */
+function withDuprId(label, player) {
+    if (!player?.duprId) return label;
+    return `${label} - ${player.duprId}`;
+}
+
 function getPlayerDisplayName(player, nickNameMap, showNickNames, statusMap) {
     const label = getPlayerLabel(player, nickNameMap, showNickNames);
+    const escapedLabel = escapeHtml(label);
+    if (player.gamesPlayed >= player.targetGames) {
+        return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
+    }
+    return escapedLabel;
+}
+
+/** Player-list display: nickname + name, plus DUPR ID when set. */
+function getPlayerListDisplayName(player, nickNameMap, showNickNames) {
+    const label = withDuprId(getPlayerLabel(player, nickNameMap, showNickNames), player);
     const escapedLabel = escapeHtml(label);
     if (player.gamesPlayed >= player.targetGames) {
         return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
@@ -1289,7 +1305,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     ${sorted.map(p => `
                         <div class="player-row">
                             <div class="player-info">
-                                <div class="player-name">${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
+                                <div class="player-name">${getPlayerListDisplayName(p, nickNameMap, true)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
                             </div>
                             ${showActions ? getPlayerActionButtons(p) : ''}
                         </div>
@@ -2371,7 +2387,7 @@ function openAddPlayersModal(eventId, selectedIds) {
         container.innerHTML = allPlayers.map(p => `
             <label class="player-checkbox-row">
                 <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}>
-                <span>${escapeHtml(p.name)}</span>
+                <span>${escapeHtml(withDuprId(p.name, p))}</span>
             </label>
         `).join('');
         container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
