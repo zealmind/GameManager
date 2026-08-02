@@ -92,9 +92,54 @@ function renderCourtScores(gameId, score1, score2) {
                     ${renderScoreConfirmActions(gameId)}
                 </div>
             </div>
-            <div class="court-score-actions">
-                <button class="btn btn-success btn-sm end-game-btn" data-game-id="${gameId}">End Game</button>
-                <button class="btn btn-danger btn-sm cancel-game-btn" data-game-id="${gameId}">Cancel Game</button>
+        </div>
+    `;
+}
+
+function renderCourtSide(label, playerNames, sideClass) {
+    const names = Array.isArray(playerNames) ? playerNames : [];
+    const top = names[0] || '';
+    const bottom = names[1] || (names.length === 1 ? '' : names.slice(1).join(', '));
+    return `
+        <div class="court-side ${sideClass}">
+            <div class="court-team-label">${label}</div>
+            <div class="court-service-half">
+                ${top ? `<div class="court-player-name">${top}</div>` : ''}
+            </div>
+            <div class="court-service-line" aria-hidden="true"></div>
+            <div class="court-service-half">
+                ${bottom ? `<div class="court-player-name">${bottom}</div>` : ''}
+            </div>
+        </div>
+    `;
+}
+
+function renderCourtMatchSurface(team1Players, team2Players, { empty = false, centerHtml = '' } = {}) {
+    if (empty) {
+        return `
+            <div class="court-match court-match--empty">
+                <div class="court-play">
+                    ${renderCourtSide('', [], 'court-side-a')}
+                    <div class="court-kitchen" aria-hidden="true"></div>
+                    <div class="court-divider" aria-hidden="true"><div class="court-net-post"></div></div>
+                    <div class="court-kitchen" aria-hidden="true"></div>
+                    ${renderCourtSide('', [], 'court-side-b')}
+                </div>
+                <div class="court-empty-label">Open court</div>
+            </div>
+        `;
+    }
+    return `
+        <div class="court-match">
+            <div class="court-play">
+                ${renderCourtSide('Team 1', team1Players, 'court-side-a')}
+                <div class="court-kitchen" aria-hidden="true"></div>
+                <div class="court-divider">
+                    ${centerHtml || '<div class="court-net-badge">NET</div>'}
+                    <div class="court-net-post" aria-hidden="true"></div>
+                </div>
+                <div class="court-kitchen" aria-hidden="true"></div>
+                ${renderCourtSide('Team 2', team2Players, 'court-side-b')}
             </div>
         </div>
     `;
@@ -314,8 +359,24 @@ function getPlayerLabel(player, nickNameMap, showNickNames) {
     return nick ? `(${nick}) ` + player.name : player.name;
 }
 
+/** Append " - DUPR ID" when the player has one. */
+function withDuprId(label, player) {
+    if (!player?.duprId) return label;
+    return `${label} - ${player.duprId}`;
+}
+
 function getPlayerDisplayName(player, nickNameMap, showNickNames, statusMap) {
     const label = getPlayerLabel(player, nickNameMap, showNickNames);
+    const escapedLabel = escapeHtml(label);
+    if (player.gamesPlayed >= player.targetGames) {
+        return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
+    }
+    return escapedLabel;
+}
+
+/** Player-list display: nickname + name, plus DUPR ID when set. */
+function getPlayerListDisplayName(player, nickNameMap, showNickNames) {
+    const label = withDuprId(getPlayerLabel(player, nickNameMap, showNickNames), player);
     const escapedLabel = escapeHtml(label);
     if (player.gamesPlayed >= player.targetGames) {
         return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
@@ -1144,9 +1205,29 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
         const actionsEl = document.getElementById('event-actions');
         if (actionsEl && event.ownerId === (currentUser?.id || '')) {
             actionsEl.innerHTML = `
-                <button class="btn btn-sm btn-secondary" id="share-view-btn">Share</button>
-                <button class="btn btn-sm btn-secondary" id="share-moderate-btn">Organize</button>
-                <button class="btn btn-sm btn-secondary" id="download-excel-btn" title="Download Excel">Download</button>
+                <button type="button" class="action-icon-btn" id="share-view-btn" title="Share" aria-label="Share">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                        <path d="M8.59 13.51l6.83 3.98M15.41 6.51l-6.82 3.98"/>
+                    </svg>
+                </button>
+                <button type="button" class="action-icon-btn" id="share-moderate-btn" title="Organize" aria-label="Organize">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="9" cy="7" r="3.5"/>
+                        <path d="M2.5 20v-1.2A4.8 4.8 0 0 1 7.3 14h3.4"/>
+                        <rect x="13" y="8" width="8.5" height="11" rx="1.5"/>
+                        <path d="M15.5 8V6.8a1.2 1.2 0 0 1 1.2-1.2h1.6a1.2 1.2 0 0 1 1.2 1.2V8"/>
+                        <path d="M15.2 13h4.1"/>
+                        <path d="M15.2 16.2h4.1"/>
+                    </svg>
+                </button>
+                <button type="button" class="action-icon-btn" id="download-excel-btn" title="Download Excel" aria-label="Download Excel">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                </button>
             `;
             document.getElementById('share-view-btn')?.addEventListener('click', () => openShareModal(eventId, 'viewer'));
             document.getElementById('share-moderate-btn')?.addEventListener('click', () => openShareModal(eventId, 'moderator'));
@@ -1213,61 +1294,78 @@ function renderRegistrationPhase(event, status) {
 function renderGamePhase(event, status, activeGames, completedGames, fromShare = false) {
     const maxCourt = event.courts || 1;
     const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
+    const nickMap = buildNickNameMap(status.players);
     let courtsHtml = '';
     status.courts.forEach(court => {
         const deadlockError = deadlockCourtErrors.get(court.courtId);
-        courtsHtml += `<div class="court-card" data-court-id="${court.courtId}">
+        const hasGame = !!court.game;
+        const isPlaying = hasGame && court.game.started;
+        const isAllotted = hasGame && !court.game.started;
+        const stateClass = isPlaying ? 'is-playing' : isAllotted ? 'is-allotted' : 'is-available';
+
+        courtsHtml += `<div class="court-card ${stateClass}" data-court-id="${court.courtId}">
             <div class="court-row">
                 <div class="court-header">Court ${court.courtId}</div>
                 <div class="court-status">
-                    ${court.game && court.game.started ? '<span class="text-muted">In Progress</span>' : ''}
-                    ${court.game && !court.game.started ? '<span class="text-muted">Allotted</span>' : ''}
-                    ${!court.game ? '<span class="text-muted">Available</span>' : ''}
-                    ${!court.game && !deadlockError ? `
+                    ${isPlaying ? '<span class="court-state-pill court-state-playing">In Progress</span>' : ''}
+                    ${isAllotted ? '<span class="court-state-pill court-state-allotted">Allotted</span>' : ''}
+                    ${!hasGame ? '<span class="court-state-pill court-state-available">Available</span>' : ''}
+                    ${!hasGame && !deadlockError ? `
                         <button class="btn btn-primary btn-sm manual-allot-btn" data-court-id="${court.courtId}">Manual Allot</button>
                         <button class="btn btn-primary btn-sm allot-btn" data-court-id="${court.courtId}">Auto Allot</button>
                     ` : ''}
                 </div>
             </div>
             <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
-        if (court.game && !court.game.started) {
+
+        if (isAllotted) {
             const g = court.game;
-            const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
-            const team2Names = g.team2.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
+            const team1Players = g.team1.map(p => getGamePlayerDisplayName(p.id, status, nickMap));
+            const team2Players = g.team2.map(p => getGamePlayerDisplayName(p.id, status, nickMap));
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}">
-                    <div class="game-teams">
-                        <div class="game-team">Team 1: ${team1Names}</div>
-                        <div class="game-team">Team 2: ${team2Names}</div>
-                        <div class="game-status status-scheduled">Allotted - Ready to start</div>
+                    ${renderCourtMatchSurface(team1Players, team2Players)}
+                    <div class="court-footer">
+                        <button class="btn btn-success btn-sm start-game-btn" data-game-id="${g.id}">Start Game</button>
                     </div>
-                    <button class="btn btn-success btn-sm start-game-btn mt-1" data-game-id="${g.id}">Start Game</button>
                 </div>
             `;
-        } else if (court.game && court.game.started) {
+        } else if (isPlaying) {
             const g = court.game;
-            const team1Names = g.team1.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
-            const team2Names = g.team2.map(p => getGamePlayerDisplayName(p.id, status, buildNickNameMap(status.players))).join(', ');
+            const team1Players = g.team1.map(p => getGamePlayerDisplayName(p.id, status, nickMap));
+            const team2Players = g.team2.map(p => getGamePlayerDisplayName(p.id, status, nickMap));
+            const s1 = getGameLocalScore(g.id, 0);
+            const s2 = getGameLocalScore(g.id, 1);
+            const score1 = s1 !== null ? s1 : (g.scores ? g.scores[0] : 0);
+            const score2 = s2 !== null ? s2 : (g.scores ? g.scores[1] : 0);
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}" data-court-id="${court.courtId}">
-                    <div class="game-teams">
-                        <div class="game-team">Team 1: ${team1Names}</div>
-                        <div class="game-team">Team 2: ${team2Names}</div>
-                        <div class="game-status status-playing">In Progress</div>
+                    <div class="court-scores" data-game-id="${g.id}">
+                        ${renderCourtMatchSurface(team1Players, team2Players, {
+                            centerHtml: `
+                                <div class="court-score-compact">
+                                    <button type="button" class="court-score-display" data-game-id="${g.id}" title="Edit score" aria-label="Edit score">
+                                        <span class="court-score-value">${score1}-${score2}</span>
+                                        <span class="court-score-edit-hint">Edit</span>
+                                    </button>
+                                </div>
+                            `
+                        })}
+                        <div class="court-score-expanded hidden" data-game-id="${g.id}">
+                            <div class="score-editor-row">
+                                ${renderScoreEditor(g.id, score1, score2)}
+                                ${renderScoreConfirmActions(g.id)}
+                            </div>
+                        </div>
                     </div>
-                    <div class="court-scores-wrap">
-                        ${(() => {
-                            const s1 = getGameLocalScore(g.id, 0);
-                            const s2 = getGameLocalScore(g.id, 1);
-                            return renderCourtScores(
-                                g.id,
-                                s1 !== null ? s1 : (g.scores ? g.scores[0] : 0),
-                                s2 !== null ? s2 : (g.scores ? g.scores[1] : 0)
-                            );
-                        })()}
+                    <div class="court-footer">
+                        <button class="btn btn-success btn-sm end-game-btn" data-game-id="${g.id}">End Game</button>
+                        <button class="btn btn-danger btn-sm cancel-game-btn" data-game-id="${g.id}">Cancel Game</button>
                     </div>
                 </div>
             `;
+        } else {
+            courtsHtml += renderCourtMatchSurface([], [], { empty: true });
         }
         courtsHtml += `</div>`;
     });
@@ -1277,7 +1375,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
     const away = status.players.filter(p => p.status === 'AWAY');
     const retired = status.players.filter(p => p.status === 'RETIRED');
     const fulfilled = status.players.filter(p => p.status === 'FULLFILLED');
-    const nickNameMap = buildNickNameMap(status.players);
+    const nickNameMap = nickMap;
 
     const renderPlayerGroup = (title, players, showActions) => {
         if (!players.length) return '';
@@ -1289,7 +1387,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     ${sorted.map(p => `
                         <div class="player-row">
                             <div class="player-info">
-                                <div class="player-name">${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
+                                <div class="player-name">${getPlayerListDisplayName(p, nickNameMap, true)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
                             </div>
                             ${showActions ? getPlayerActionButtons(p) : ''}
                         </div>
@@ -1308,9 +1406,11 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         </div>
 
         ${!status.isEnded && !fromShare ? `
-        <div class="card">
-            <div class="card-subtitle mb-2">Game Field</div>
-            ${courtsHtml}
+        <div class="card game-field-card">
+            <div class="card-subtitle mb-2 game-field-title">Game Field</div>
+            <div class="game-field">
+                ${courtsHtml}
+            </div>
         </div>
         ` : ''}
 
@@ -2371,7 +2471,7 @@ function openAddPlayersModal(eventId, selectedIds) {
         container.innerHTML = allPlayers.map(p => `
             <label class="player-checkbox-row">
                 <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}>
-                <span>${escapeHtml(p.name)}</span>
+                <span>${escapeHtml(withDuprId(p.name, p))}</span>
             </label>
         `).join('');
         container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
