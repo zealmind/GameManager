@@ -552,6 +552,23 @@ export class Database {
     return event;
   }
 
+  /**
+   * Create an unstarted copy of an event that imports only registered players
+   * (no games, history, start/end state, or share links).
+   */
+  async copyEvent(sourceEventId: string, name: string, ownerId: string): Promise<Event> {
+    const source = this.events.get(sourceEventId);
+    if (!source) throw new Error('Event not found');
+
+    const event = await this.createEvent(name, source.totalGamesToPlay, source.courts, ownerId);
+    for (const player of source.players.values()) {
+      const canonical = this.players.get(player.id) || player;
+      event.addPlayer(canonical);
+    }
+    await this.persistEvent(event.id);
+    return event;
+  }
+
   private pruneShareTokens(
     event: Event,
     permission: 'viewer' | 'moderator',

@@ -109,6 +109,41 @@ router.delete('/:eventId/share', authenticate, async (req: AuthenticatedRequest,
   }
 });
 
+// PATCH /events/:eventId - Rename an event (owner only)
+router.patch('/:eventId', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) {
+      return res.status(400).json({ error: 'Missing required field: name' });
+    }
+
+    event.name = name;
+    await db.persistEvent(event.id);
+    res.json(prepareEventResponse(event));
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /events/:eventId/copy - Copy an event with players only, unstarted (owner only)
+router.post('/:eventId/copy', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const source = await requireEventOwner(req, res);
+    if (!source) return;
+
+    const requestedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const name = requestedName || `Copy of ${source.name}`;
+
+    const event = await db.copyEvent(source.id, name, req.user!.id);
+    res.status(201).json(prepareEventResponse(event));
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // DELETE /events/:eventId - Delete an event (owner only)
 router.delete('/:eventId', authenticate, async (req: AuthenticatedRequest, res) => {
   try {

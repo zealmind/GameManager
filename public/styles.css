@@ -1829,6 +1829,15 @@ html, body {
     font-weight: 500;
 }
 
+.list-item-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 2px;
+    flex-shrink: 0;
+    max-width: 55%;
+}
+
 .delete-link {
     color: var(--text-secondary);
     font-size: 12px;

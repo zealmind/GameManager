@@ -972,10 +972,14 @@ async function loadEventsList() {
             const isShared = sharedIds.has(e.id) || (e.sharedAccess && e.sharedAccess.length > 0);
             const isOwner = currentUser && e.ownerId === currentUser.id;
             let actionHtml = '';
-            if (isOwner && isShared) {
-                actionHtml = `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> <span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
-            } else if (isOwner) {
-                actionHtml = `<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
+            if (isOwner) {
+                const unshare = isShared
+                    ? `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> `
+                    : '';
+                actionHtml = `
+                    <span class="delete-link rename-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Rename</span>
+                    <span class="delete-link copy-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Copy</span>
+                    ${unshare}<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
             } else {
                 actionHtml = '<span class="text-muted" style="font-size:11px;">Shared</span>';
             }
@@ -985,14 +989,26 @@ async function loadEventsList() {
                     <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
                     <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
-                ${actionHtml}
+                <div class="list-item-actions">${actionHtml}</div>
             </div>
         `;
         }).join('');
         container.querySelectorAll('.list-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                if (e.target.classList.contains('delete-event-btn')) return;
+                if (e.target.closest('.list-item-actions')) return;
                 openEventDetail(item.dataset.eventId);
+            });
+        });
+        container.querySelectorAll('.rename-event-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openRenameEventModal(btn.dataset.eventId, btn.dataset.eventName || '');
+            });
+        });
+        container.querySelectorAll('.copy-event-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openCopyEventModal(btn.dataset.eventId, btn.dataset.eventName || '');
             });
         });
         container.querySelectorAll('.delete-event-btn').forEach(btn => {
@@ -1089,6 +1105,102 @@ function openCreateEventModal() {
             overlay.remove();
             loadEventsList();
             showToast('Event created!');
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function openRenameEventModal(eventId, currentName) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Rename Event</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="rename-event-form">
+                <div class="form-group">
+                    <label>Event Name</label>
+                    <input type="text" name="name" required value="${escapeHtml(currentName)}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const nameInput = overlay.querySelector('input[name="name"]');
+    if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+    }
+    document.getElementById('rename-event-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = (new FormData(e.target).get('name') || '').trim();
+        if (!name) {
+            showToast('Event Name is required');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name })
+            });
+            overlay.remove();
+            loadEventsList();
+            showToast('Event renamed');
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function openCopyEventModal(eventId, currentName) {
+    const defaultName = currentName ? `Copy of ${currentName}` : 'Copy of Event';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Copy Event</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <p class="text-muted" style="font-size:13px; margin:0 0 12px;">Creates a new unstarted event with the same players. Games and scores are not copied.</p>
+            <form id="copy-event-form">
+                <div class="form-group">
+                    <label>New Event Name</label>
+                    <input type="text" name="name" required value="${escapeHtml(defaultName)}">
+                </div>
+                <button type="submit" class="btn btn-primary">Create Copy</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const nameInput = overlay.querySelector('input[name="name"]');
+    if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+    }
+    document.getElementById('copy-event-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = (new FormData(e.target).get('name') || '').trim();
+        if (!name) {
+            showToast('Event Name is required');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}/copy`, {
+                method: 'POST',
+                body: JSON.stringify({ name })
+            });
+            overlay.remove();
+            loadEventsList();
+            showToast('Event copied');
         } catch (err) {
             showToast(err.message);
         }
