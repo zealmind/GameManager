@@ -661,15 +661,32 @@ html, body {
 }
 
 .court-msg {
-    display: none;
-    margin-bottom: 6px;
-    padding: 6px 8px;
+    margin: 0 0 8px;
+    padding: 8px 10px;
     background: #fef2f2;
     border: 1px solid #dc2626;
-    border-radius: 6px;
+    border-radius: 8px;
     color: #991b1b;
     font-size: 12px;
-    line-height: 1.3;
+    line-height: 1.35;
+    font-weight: 500;
+}
+
+.court-msg.court-msg-warning {
+    background: #fffbeb;
+    border-color: #d97706;
+    color: #92400e;
+}
+
+.court-allot-warning {
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    background: #fffbeb;
+    border: 1px solid #d97706;
+    border-radius: 8px;
+    color: #92400e;
+    font-size: 12px;
+    line-height: 1.35;
     font-weight: 500;
 }
 

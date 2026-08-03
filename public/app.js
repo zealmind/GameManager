@@ -1,6 +1,7 @@
 const API_BASE = (window.__API_BASE__ && window.__API_BASE__.replace(/\/$/, '')) || window.location.origin;
 let currentEventId = null;
 const deadlockCourtErrors = new Map();
+const allotmentCourtWarnings = new Map();
 let currentCompletedGamesFilter = '';
 let currentUser = null;
 let accessMode = null; // null | 'viewer' | 'moderator'
@@ -725,6 +726,7 @@ function logout() {
     }
     currentEventId = null;
     deadlockCourtErrors.clear();
+    allotmentCourtWarnings.clear();
     localGameScores.clear();
     editingCompletedScoreGameId = null;
     editingCourtScoreGameId = null;
@@ -1416,6 +1418,15 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         const hasGame = !!court.game;
         const isPlaying = hasGame && court.game.started;
         const isAllotted = hasGame && !court.game.started;
+        const allotmentWarning = isAllotted
+            ? (court.game.allotmentWarning || allotmentCourtWarnings.get(court.courtId) || '')
+            : '';
+        if (isAllotted && court.game.allotmentWarning) {
+            allotmentCourtWarnings.set(court.courtId, court.game.allotmentWarning);
+        }
+        if (!isAllotted) {
+            allotmentCourtWarnings.delete(court.courtId);
+        }
         const stateClass = isPlaying ? 'is-playing' : isAllotted ? 'is-allotted' : 'is-available';
 
         courtsHtml += `<div class="court-card ${stateClass}" data-court-id="${court.courtId}">
@@ -1431,7 +1442,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     ` : ''}
                 </div>
             </div>
-            <div class="court-msg" style="display: ${deadlockError ? 'block' : 'none'}">${deadlockError ? escapeHtml(deadlockError) : ''}</div>`;
+            ${deadlockError ? `<div class="court-msg">${escapeHtml(deadlockError)}</div>` : ''}`;
 
         if (isAllotted) {
             const g = court.game;
@@ -1439,9 +1450,11 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             const team2Players = g.team2.map(p => getGamePlayerDisplayName(p.id, status, nickMap));
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}">
+                    ${allotmentWarning ? `<div class="court-allot-warning">${escapeHtml(allotmentWarning)}</div>` : ''}
                     ${renderCourtMatchSurface(team1Players, team2Players)}
                     <div class="court-footer">
                         <button class="btn btn-success btn-sm start-game-btn" data-game-id="${g.id}">Start Game</button>
+                        <button class="btn btn-secondary btn-sm cancel-allot-btn" data-court-id="${court.courtId}">Cancel Allotment</button>
                     </div>
                 </div>
             `;
@@ -2458,13 +2471,17 @@ function bindEventDetailActions(eventId, event, status) {
                     const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
                     if (res.status && res.status === 'WAITING' && res.message) {
                         deadlockCourtErrors.set(courtId, res.message);
+                        allotmentCourtWarnings.delete(courtId);
                         showToast(`Court ${courtId}: ${res.message}`);
                         loadEventDetail(eventId);
                     } else {
                         deadlockCourtErrors.delete(courtId);
-                        if (res.warning) {
-                            showToast(`Court ${courtId} allotted — ${res.warning}`, { warning: true });
+                        const warning = res.warning || res.allotmentWarning;
+                        if (warning) {
+                            allotmentCourtWarnings.set(courtId, warning);
+                            showToast(`Court ${courtId} allotted — ${warning}`, { warning: true });
                         } else {
+                            allotmentCourtWarnings.delete(courtId);
                             showToast(`Court ${courtId} allotted`);
                         }
                         loadEventDetail(eventId);
@@ -2498,6 +2515,7 @@ function bindEventDetailActions(eventId, event, status) {
                 try {
                     await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
                     deadlockCourtErrors.delete(courtId);
+                    allotmentCourtWarnings.delete(courtId);
                     showToast('Allotment cancelled');
                     loadEventDetail(eventId);
                 } catch (err) {

@@ -38,7 +38,12 @@ export class SchedulingService {
     const reg = event.getRegistration(playerId);
     if (!reg) return 0;
     if (reg.gamesPlayedCount === 0) return 10;
-    if (reg.gamesPlayedCount >= reg.targetGames) return 0;
+    if (reg.gamesPlayedCount >= reg.targetGames) {
+      // Fulfilled players who explicitly returned to WAITING may play one more game;
+      // targetGames / fulfilled state stay unchanged, and endGame sends them AWAY again.
+      if (reg.status === 'WAITING') return Math.max(reg.priority, 5);
+      return 0;
+    }
     return reg.priority;
   }
 
@@ -194,8 +199,12 @@ export class SchedulingService {
     if (best.partnerRepeats > 0) {
       parts.push('repeat partners (no unused partnerships available)');
     }
-    if (best.maxCoPlay >= 3) {
-      parts.push(`some players already shared a court ${best.maxCoPlay} times`);
+    // This game increments every pair in the foursome by 1.
+    // Warn when any pair is already at 2+ so the result would be 3+.
+    if (best.maxCoPlay >= 2) {
+      parts.push(
+        `some players will share a court ${best.maxCoPlay + 1}+ times — cancel and wait if more players become available`
+      );
     }
     if (parts.length === 0) return undefined;
     return `Best available grouping used — ${parts.join('; ')}`;
@@ -303,6 +312,8 @@ export class SchedulingService {
     assignment: ScoredAssignment
   ): ScheduleResult {
     const game = createGame(eventId, courtId, assignment.team1, assignment.team2);
+    const warning = this.buildWarning(assignment);
+    if (warning) game.allotmentWarning = warning;
     for (const pid of [...assignment.team1, ...assignment.team2]) {
       event.updateRegistration(pid, { status: 'PLAYING' });
     }
@@ -310,7 +321,7 @@ export class SchedulingService {
     return {
       success: true,
       game,
-      warning: this.buildWarning(assignment),
+      warning,
     };
   }
 

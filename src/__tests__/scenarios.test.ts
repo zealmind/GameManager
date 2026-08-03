@@ -50,6 +50,46 @@ describe('Pickleball Event Scheduler Validation', () => {
     expect(result.warning).toMatch(/repeat partners/i);
   });
 
+  it('should warn when allotment would raise co-play counts to 3+', async () => {
+    const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
+
+    const players = [];
+    for (let i = 1; i <= 4; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+    const ids = players.map(p => p.id);
+
+    // Every pair among the 4 already shared a court twice → next game makes 3s
+    for (let n = 0; n < 2; n++) {
+      event.gameHistory.push({
+        id: `hist-${n}`,
+        eventId: event.id,
+        gameNumber: n + 1,
+        courtId: 1,
+        players: { team1: [ids[0], ids[1]], team2: [ids[2], ids[3]] },
+        createdAt: new Date(),
+        completed: true,
+        started: true,
+      } as any);
+    }
+
+    for (const id of ids) {
+      const reg = event.getRegistration(id)!;
+      reg.gamesPlayedCount = 2;
+      reg.priority = 5;
+      reg.targetGames = 10;
+      reg.partners = [];
+    }
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.warning).toBeDefined();
+    expect(result.warning).toMatch(/3\+/);
+    expect(result.game?.allotmentWarning).toBe(result.warning);
+  });
+
   it('should prefer unique partners over higher-priority repeat-partner groupings', async () => {
     const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
 
@@ -192,6 +232,45 @@ describe('Pickleball Event Scheduler Validation', () => {
     }
     
     expect(event.gameHistory.length).toBe(gamesScheduled);
+  });
+
+  it('should allow one more game for fulfilled players who return to waiting, then set them away again', async () => {
+    const event = await db.createEvent('Test Event', 6, 2, DEFAULT_OWNER);
+
+    const players = [];
+    for (let i = 1; i <= 4; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+
+    for (const p of players) {
+      const reg = event.getRegistration(p.id)!;
+      reg.gamesPlayedCount = 6;
+      reg.targetGames = 6;
+      reg.status = 'WAITING';
+      reg.priority = 5;
+    }
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.game).toBeDefined();
+
+    // Target stays at 6 — fulfilled state unchanged
+    for (const p of players) {
+      expect(event.getRegistration(p.id)!.targetGames).toBe(6);
+    }
+
+    result.game!.scores = [11, 7];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    for (const pid of [...result.game!.players.team1, ...result.game!.players.team2]) {
+      const reg = event.getRegistration(pid)!;
+      expect(reg.gamesPlayedCount).toBe(7);
+      expect(reg.targetGames).toBe(6);
+      expect(reg.status).toBe('AWAY');
+    }
   });
 
   it('should continue scheduling after player becomes unavailable', async () => {

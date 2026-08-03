@@ -218,7 +218,10 @@ export class Database {
         g.eventId,
         g.gameNumber ?? 0,
         g.courtId,
-        JSON.stringify(g.players),
+        JSON.stringify({
+          ...g.players,
+          ...(g.allotmentWarning ? { allotmentWarning: g.allotmentWarning } : {}),
+        }),
         g.scores != null ? JSON.stringify(g.scores) : null,
         g.createdAt instanceof Date ? g.createdAt.toISOString() : g.createdAt,
         g.completed ? 1 : 0,
@@ -380,7 +383,13 @@ export class Database {
 
       const gamesByEvent = new Map<string, { active: Game[]; history: Game[] }>();
       for (const row of gameRows.rows as any[]) {
-        const players = typeof row.players === 'string' ? JSON.parse(row.players) : row.players;
+        const playersRaw = typeof row.players === 'string' ? JSON.parse(row.players) : row.players;
+        const allotmentWarning =
+          typeof playersRaw?.allotmentWarning === 'string' ? playersRaw.allotmentWarning : undefined;
+        const players = {
+          team1: playersRaw?.team1 || [],
+          team2: playersRaw?.team2 || [],
+        };
         const scores = row.scores == null
           ? undefined
           : (typeof row.scores === 'string' ? JSON.parse(row.scores) : row.scores);
@@ -396,6 +405,7 @@ export class Database {
           started: Boolean(row.started),
           startedAt: row.startedAt ? new Date(row.startedAt) : undefined,
           completedAt: row.completedAt ? new Date(row.completedAt) : undefined,
+          ...(allotmentWarning ? { allotmentWarning } : {}),
         };
         const bucket = gamesByEvent.get(game.eventId) || { active: [], history: [] };
         if (row.in_history) bucket.history.push(game);

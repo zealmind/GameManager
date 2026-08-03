@@ -342,7 +342,8 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
              name: event.players.get(id)?.name || id.slice(0,8)
            })),
           started: active.started,
-          scores: active.scores
+          scores: active.scores,
+          allotmentWarning: active.allotmentWarning || null
         } : null
       });
     }

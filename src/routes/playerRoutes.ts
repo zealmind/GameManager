@@ -163,10 +163,15 @@ router.patch('/:eventId/players/:playerId', withEventAccess as any, loadEvent as
 
     if (status === 'WAITING') {
       event.recalculateTargetGames();
+      // Ensure returned players are allotment-eligible (priority > 0)
+      const reg = event.getRegistration(req.params.playerId as string);
+      if (reg && reg.priority <= 0) {
+        event.updateRegistration(req.params.playerId as string, { priority: 5 });
+      }
     }
 
     await db.persistEvent(event.id);
-    res.json(updated);
+    res.json(event.getRegistration(req.params.playerId as string) || updated);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }

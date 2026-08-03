@@ -15,6 +15,8 @@ export interface Game {
   started: boolean;
   startedAt?: Date;
   completedAt?: Date;
+  /** Soft-constraint notice from auto/manual allotment (shown until start/cancel) */
+  allotmentWarning?: string;
 }
 
 export function createGame(
