@@ -67,7 +67,10 @@ router.post('/:eventId/schedule', withEventAccess as any, loadEvent as any, asyn
     }
 
     await db.persistEvent(req.params.eventId as string);
-    res.status(201).json(result.game);
+    res.status(201).json({
+      ...result.game,
+      ...(result.warning ? { warning: result.warning } : {})
+    });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -140,7 +143,6 @@ router.post('/:eventId/courts/:courtId/allot-manual', withEventAccess as any, lo
     const team1Clean = team1.filter(Boolean);
     const team2Clean = team2.filter(Boolean);
 
-    let game;
     if (team1Clean.length + team2Clean.length < 4) {
       const result = schedulingService.completePartialGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
       if (!result.success || !result.game) {
@@ -149,11 +151,15 @@ router.post('/:eventId/courts/:courtId/allot-manual', withEventAccess as any, lo
           blockingConstraints: result.blockingConstraints
         });
       }
-      game = result.game;
-    } else {
-      game = createGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
+      // completePartialGame already set PLAYING and pushed the game
+      await db.persistEvent(req.params.eventId as string);
+      return res.status(201).json({
+        ...result.game,
+        ...(result.warning ? { warning: result.warning } : {})
+      });
     }
 
+    const game = createGame(req.params.eventId as string, courtId, team1Clean, team2Clean);
     const allGamePlayers = [...game.players.team1, ...game.players.team2];
     for (const pid of allGamePlayers) {
       event.updateRegistration(pid, { status: 'PLAYING' });
@@ -195,7 +201,10 @@ router.post('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEvent
     }
 
     await db.persistEvent(req.params.eventId as string);
-    res.status(201).json(result.game);
+    res.status(201).json({
+      ...result.game,
+      ...(result.warning ? { warning: result.warning } : {})
+    });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }

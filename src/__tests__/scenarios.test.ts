@@ -26,7 +26,7 @@ describe('Pickleball Event Scheduler Validation', () => {
     expect(result.blockingConstraints?.length).toBeGreaterThan(0);
   });
 
-  it('should detect deadlock when all available players have played with each other', async () => {
+  it('should allot with a warning when all available players have already partnered', async () => {
     const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
     
     const players = [];
@@ -44,10 +44,92 @@ describe('Pickleball Event Scheduler Validation', () => {
     regs[3].partners = [regs[0].playerId, regs[1].playerId, regs[2].playerId];
     
     const result = scheduler.assignNextGame(event.id, 1);
-    expect(result.success).toBe(false);
-    expect(result.shouldWait).toBe(true);
-    expect(result.blockingConstraints).toBeDefined();
-    expect(result.blockingConstraints?.length).toBeGreaterThan(0);
+    expect(result.success).toBe(true);
+    expect(result.game).toBeDefined();
+    expect(result.warning).toBeDefined();
+    expect(result.warning).toMatch(/repeat partners/i);
+  });
+
+  it('should prefer unique partners over higher-priority repeat-partner groupings', async () => {
+    const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
+
+    const players = [];
+    for (let i = 1; i <= 6; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+    const ids = players.map(p => p.id);
+
+    // High-priority players 0-3 have all partnered with each other already
+    for (let i = 0; i < 4; i++) {
+      const reg = event.getRegistration(ids[i])!;
+      reg.gamesPlayedCount = 1;
+      reg.priority = 7;
+      reg.targetGames = 10;
+      reg.partners = ids.filter((_, j) => j < 4 && j !== i);
+    }
+    // Lower-priority players 4-5 are fresh and can form unique partnerships with anyone
+    for (let i = 4; i < 6; i++) {
+      const reg = event.getRegistration(ids[i])!;
+      reg.gamesPlayedCount = 1;
+      reg.priority = 5;
+      reg.targetGames = 10;
+      reg.partners = [];
+    }
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.warning).toBeUndefined();
+
+    const t1 = result.game!.players.team1;
+    const t2 = result.game!.players.team2;
+    expect(scheduler.hasPlayedTogether(t1[0], t1[1], event)).toBe(false);
+    expect(scheduler.hasPlayedTogether(t2[0], t2[1], event)).toBe(false);
+  });
+
+  it('should prefer groupings that fill unused co-play pairs over high-repeat courts', async () => {
+    const event = await db.createEvent('Test Event', 10, 2, DEFAULT_OWNER);
+
+    const players = [];
+    for (let i = 1; i <= 6; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+    const ids = players.map(p => p.id);
+
+    // Simulate history: players 0-3 have shared courts heavily; 4-5 are fresh faces
+    for (let n = 0; n < 3; n++) {
+      event.gameHistory.push({
+        id: `hist-${n}`,
+        eventId: event.id,
+        gameNumber: n + 1,
+        courtId: 1,
+        players: { team1: [ids[0], ids[1]], team2: [ids[2], ids[3]] },
+        createdAt: new Date(),
+        completed: true,
+        started: true,
+      } as any);
+    }
+
+    // Mark equal priority / games so matrix score decides among top candidates
+    for (const id of ids) {
+      const reg = event.getRegistration(id)!;
+      reg.gamesPlayedCount = 1;
+      reg.priority = 5;
+      reg.targetGames = 10;
+    }
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    const allotted = new Set([
+      ...result.game!.players.team1,
+      ...result.game!.players.team2,
+    ]);
+    // Fresh players 4 and 5 should be preferred to avoid stacking 0-3 again
+    expect(allotted.has(ids[4])).toBe(true);
+    expect(allotted.has(ids[5])).toBe(true);
   });
 
   it('should form 1v2 game when 3 players are available and 2v2 pairing fails', async () => {

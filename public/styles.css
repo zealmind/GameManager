@@ -1053,6 +1053,10 @@ html, body {
     opacity: 1;
 }
 
+.toast.toast-warning {
+    background: #92400e;
+}
+
 /* Court scoreboard + edit */
 .court-scores {
     display: flex;
@@ -1963,6 +1967,16 @@ html, body {
 .played-with-matrix td.played-with-self {
     color: var(--text-muted);
     font-style: italic;
+}
+
+.played-with-matrix td.played-with-zero {
+    background: #e5e7eb;
+    color: #6b7280;
+}
+
+.played-with-matrix td.played-with-high {
+    background: #fecaca;
+    color: #991b1b;
 }
 
 .played-with-fullscreen {

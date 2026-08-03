@@ -313,7 +313,7 @@ function isLoggedIn() {
   return !!getToken();
 }
 
-function showToast(msg) {
+function showToast(msg, opts = {}) {
     let toast = document.querySelector('.toast');
     if (!toast) {
         toast = document.createElement('div');
@@ -321,8 +321,11 @@ function showToast(msg) {
         document.body.appendChild(toast);
     }
     toast.textContent = msg;
+    toast.classList.toggle('toast-warning', !!opts.warning);
     toast.classList.add('show');
-    setTimeout(() => toast.classList.remove('show'), 3000);
+    const duration = opts.warning ? 5000 : 3000;
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => toast.classList.remove('show'), duration);
 }
 
 let currentNickNameMap = new Map();
@@ -1620,7 +1623,15 @@ function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = f
             const j = indexMap.get(colId);
             const count = matrix[i][j];
             const isDiagonal = rowId === colId;
-            return `<td class="${isDiagonal ? 'played-with-self' : ''}">${isDiagonal ? '-' : count}</td>`;
+            let cellClass = '';
+            if (isDiagonal) {
+                cellClass = 'played-with-self';
+            } else if (count === 0) {
+                cellClass = 'played-with-zero';
+            } else if (count >= 3) {
+                cellClass = 'played-with-high';
+            }
+            return `<td class="${cellClass}">${isDiagonal ? '-' : count}</td>`;
         }).join('');
         return `<tr><th class="played-with-row-header">${escapeHtml(getLabel(rowId))}</th>${cells}</tr>`;
     }).join('');
@@ -2451,7 +2462,11 @@ function bindEventDetailActions(eventId, event, status) {
                         loadEventDetail(eventId);
                     } else {
                         deadlockCourtErrors.delete(courtId);
-                        showToast(`Court ${courtId} allotted`);
+                        if (res.warning) {
+                            showToast(`Court ${courtId} allotted — ${res.warning}`, { warning: true });
+                        } else {
+                            showToast(`Court ${courtId} allotted`);
+                        }
                         loadEventDetail(eventId);
                     }
                 } catch (err) {
@@ -2639,11 +2654,17 @@ function bindEventDetailActions(eventId, event, status) {
 async function scheduleGame(eventId) {
     try {
         const result = await api(`${API_BASE}/events/${eventId}/schedule`, { method: 'POST' });
-        if (result.message) {
+        if (result.status === 'WAITING' && result.message) {
             showToast(result.message);
-        } else if (result.game) {
-            showToast('Game scheduled!');
+        } else if (result.id || result.game) {
+            if (result.warning) {
+                showToast(`Game scheduled — ${result.warning}`, { warning: true });
+            } else {
+                showToast('Game scheduled!');
+            }
             loadEventDetail(eventId);
+        } else if (result.message) {
+            showToast(result.message);
         } else {
             showToast('Unexpected response');
         }
@@ -3210,7 +3231,11 @@ function openManualAllotModal(eventId, courtId) {
                 method: 'POST',
                 body: JSON.stringify({ team1, team2 })
             });
-            showToast(`Court ${currentCourtId} manually allotted`);
+            if (res.warning) {
+                showToast(`Court ${currentCourtId} manually allotted — ${res.warning}`, { warning: true });
+            } else {
+                showToast(`Court ${currentCourtId} manually allotted`);
+            }
             overlay.remove();
             loadEventDetail(currentEventId);
         } catch (err) {
