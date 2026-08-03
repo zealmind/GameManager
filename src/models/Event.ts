@@ -49,14 +49,26 @@ start(): void {
      this.assignNickNames();
    }
 
-   assignNickNames(): void {
+   /** Assign unique per-event nicknames on registrations. Returns true if any changed. */
+   assignNickNames(): boolean {
+     const regs = Array.from(this.registrations.values());
+     const nickCounts = new Map<string, number>();
+     for (const reg of regs) {
+       if (!reg.nickName) continue;
+       nickCounts.set(reg.nickName, (nickCounts.get(reg.nickName) || 0) + 1);
+     }
+     let changed = false;
+     // Collisions (e.g. migrated global nicknames) — clear and reassign all
+     if ([...nickCounts.values()].some(c => c > 1)) {
+       for (const reg of regs) delete reg.nickName;
+       changed = true;
+     }
+
      const usedLetters = new Set(
-       Array.from(this.players.values())
-         .map(p => p.nickName)
-         .filter((n): n is string => !!n)
+       regs.map(r => r.nickName).filter((n): n is string => !!n)
      );
-     const unassigned = Array.from(this.players.values()).filter(p => !p.nickName);
-     if (unassigned.length === 0) return;
+     const unassigned = regs.filter(r => !r.nickName);
+     if (unassigned.length === 0) return changed;
 
      let nextCode = 65;
      const nextLetter = (): string => {
@@ -72,7 +84,8 @@ start(): void {
        const j = Math.floor(Math.random() * (i + 1));
        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
      }
-     shuffled.forEach(p => { p.nickName = nextLetter(); });
+     shuffled.forEach(r => { r.nickName = nextLetter(); });
+     return true;
    }
 
   // Player registration

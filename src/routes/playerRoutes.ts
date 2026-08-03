@@ -27,7 +27,7 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
     const player = await db.createPlayer(name, req.user!.id, normalizedDuprId);
     res.status(201).json(player);
   } catch (err: any) {
-    if (err?.message?.includes('already exists')) {
+    if (err?.message?.includes('already exists') || err?.message?.includes('cannot be empty')) {
       return res.status(409).json({ error: err.message });
     }
     res.status(500).json({ error: 'Internal server error' });
@@ -111,11 +111,13 @@ router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async
         return res.status(403).json({ error: 'Forbidden' });
       }
     } else if (name) {
-      const existing = db.findPlayerByName(name);
+      const userId = req.user?.id;
+      const existing =
+        db.findPlayerByName(name) ||
+        (userId ? db.findPlayerByDuprId(name, userId) : db.findPlayerByDuprId(name));
       if (existing) {
         player = existing;
       } else {
-        const userId = req.user?.id;
         if (!userId) {
           return res.status(403).json({ error: 'Forbidden' });
         }

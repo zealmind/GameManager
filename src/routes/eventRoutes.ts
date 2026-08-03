@@ -17,13 +17,16 @@ function prepareEventResponse(event: Event) {
     startedAt: event.startedAt,
     endedAt: event.endedAt,
     ownerId: ev.ownerId,
-    players: Array.from(event.players.values()).map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      nickName: p.nickName,
-      duprId: p.duprId,
-      ownerId: p.ownerId,
-    })),
+    players: Array.from(event.players.values()).map((p: any) => {
+      const reg = event.registrations.get(p.id);
+      return {
+        id: p.id,
+        name: p.name,
+        nickName: reg?.nickName,
+        duprId: p.duprId,
+        ownerId: p.ownerId,
+      };
+    }),
     registrations: Array.from(event.registrations.values()),
     games: event.games,
     gameHistory: event.gameHistory,
@@ -104,6 +107,41 @@ router.delete('/:eventId/share', authenticate, async (req: AuthenticatedRequest,
     event.sharedAccess = [];
     await db.persistEvent(event.id);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /events/:eventId - Rename an event (owner only)
+router.patch('/:eventId', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const event = await requireEventOwner(req, res);
+    if (!event) return;
+
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    if (!name) {
+      return res.status(400).json({ error: 'Missing required field: name' });
+    }
+
+    event.name = name;
+    await db.persistEvent(event.id);
+    res.json(prepareEventResponse(event));
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /events/:eventId/copy - Copy an event with players only, unstarted (owner only)
+router.post('/:eventId/copy', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const source = await requireEventOwner(req, res);
+    if (!source) return;
+
+    const requestedName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const name = requestedName || `Copy of ${source.name}`;
+
+    const event = await db.copyEvent(source.id, name, req.user!.id);
+    res.status(201).json(prepareEventResponse(event));
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }

@@ -72,6 +72,7 @@ export class Database {
         targetGames INTEGER NOT NULL DEFAULT 6,
         partners TEXT NOT NULL DEFAULT '[]',
         priority INTEGER NOT NULL DEFAULT 10,
+        nick_name TEXT,
         PRIMARY KEY (eventId, playerId)
       );
       CREATE TABLE IF NOT EXISTS games (
@@ -98,6 +99,7 @@ export class Database {
     `);
 
     await this.migrateAddDuprId();
+    await this.migrateAddRegistrationNickName();
     await this.load();
   }
 
@@ -105,6 +107,15 @@ export class Database {
   private async migrateAddDuprId(): Promise<void> {
     try {
       await this.client.execute('ALTER TABLE players ADD COLUMN dupr_id TEXT');
+    } catch {
+      // column already exists
+    }
+  }
+
+  /** Add nick_name to existing registrations tables (per-event, not on shared players). */
+  private async migrateAddRegistrationNickName(): Promise<void> {
+    try {
+      await this.client.execute('ALTER TABLE registrations ADD COLUMN nick_name TEXT');
     } catch {
       // column already exists
     }
@@ -147,13 +158,13 @@ export class Database {
       sql: `INSERT INTO players (id, name, nick_name, owner_id, dupr_id) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
-              nick_name = excluded.nick_name,
+              nick_name = NULL,
               owner_id = excluded.owner_id,
               dupr_id = excluded.dupr_id`,
       args: [
         player.id,
         player.name,
-        player.nickName ?? null,
+        null,
         player.ownerId ?? null,
         player.duprId ?? null,
       ],
@@ -162,14 +173,15 @@ export class Database {
 
   private registrationUpsertStmt(r: EventPlayerRegistration): { sql: string; args: any[] } {
     return {
-      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(eventId, playerId) DO UPDATE SET
               gamesPlayedCount = excluded.gamesPlayedCount,
               status = excluded.status,
               targetGames = excluded.targetGames,
               partners = excluded.partners,
-              priority = excluded.priority`,
+              priority = excluded.priority,
+              nick_name = excluded.nick_name`,
       args: [
         r.eventId,
         r.playerId,
@@ -178,6 +190,7 @@ export class Database {
         r.targetGames,
         JSON.stringify(r.partners || []),
         r.priority ?? 10,
+        r.nickName ?? null,
       ],
     };
   }
@@ -225,7 +238,7 @@ export class Database {
 
   /**
    * Persist one event and its related rows only (registrations, games, shares),
-   * plus any players attached to the event (e.g. nicknames).
+   * plus any players attached to the event.
    * Other events are left untouched for better concurrency.
    */
   async persistEvent(eventId: string): Promise<void> {
@@ -327,7 +340,6 @@ export class Database {
       const playerRows = await this.client.execute('SELECT id, name, nick_name, owner_id, dupr_id FROM players');
       for (const row of playerRows.rows as any[]) {
         const player = new Player(row.name as string, row.id as string);
-        if (row.nick_name) player.nickName = row.nick_name as string;
         player.ownerId = row.owner_id ?? undefined;
         if (row.dupr_id) player.duprId = row.dupr_id as string;
         this.players.set(player.id, player);
@@ -337,7 +349,7 @@ export class Database {
         'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id FROM events'
       );
       const regRows = await this.client.execute(
-        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority FROM registrations'
+        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name FROM registrations'
       );
       const gameRows = await this.client.execute(
         `SELECT id, eventId, gameNumber, courtId, players, scores, createdAt,
@@ -358,6 +370,7 @@ export class Database {
           targetGames: Number(row.targetGames) || 0,
           partners,
           priority: row.priority != null ? Number(row.priority) : 10,
+          nickName: row.nick_name || undefined,
         };
         const list = regsByEvent.get(reg.eventId) || [];
         list.push(reg);
@@ -482,15 +495,37 @@ export class Database {
     return Array.from(this.players.values()).filter(p => p.ownerId === ownerId);
   }
 
-  async createPlayer(name: string, ownerId: string, duprId?: string): Promise<Player> {
+  private assertUniquePlayerIdentity(
+    ownerId: string,
+    name: string,
+    duprId: string | undefined,
+    excludePlayerId?: string
+  ): void {
+    const nameKey = name.trim().toLowerCase();
+    const duprKey = duprId ? duprId.trim().toLowerCase() : '';
+
     for (const p of this.players.values()) {
-      if (p.name === name && p.ownerId === ownerId) {
-        throw new Error(`Player "${name}" already exists`);
+      if (p.ownerId !== ownerId) continue;
+      if (excludePlayerId && p.id === excludePlayerId) continue;
+
+      if (p.name.trim().toLowerCase() === nameKey) {
+        throw new Error(`Player "${name.trim()}" already exists`);
+      }
+      if (duprKey && p.duprId && p.duprId.trim().toLowerCase() === duprKey) {
+        throw new Error(`DUPR ID "${duprId!.trim()}" already exists`);
       }
     }
-    const player = new Player(name);
+  }
+
+  async createPlayer(name: string, ownerId: string, duprId?: string): Promise<Player> {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Player name cannot be empty');
+    const trimmedDuprId = duprId?.trim() || undefined;
+    this.assertUniquePlayerIdentity(ownerId, trimmedName, trimmedDuprId);
+
+    const player = new Player(trimmedName);
     player.ownerId = ownerId;
-    if (duprId) player.duprId = duprId;
+    if (trimmedDuprId) player.duprId = trimmedDuprId;
     this.players.set(player.id, player);
     await this.savePlayer(player);
     return player;
@@ -503,28 +538,39 @@ export class Database {
     const player = this.players.get(playerId);
     if (!player) return undefined;
 
-    if (updates.name !== undefined) {
-      const trimmed = updates.name.trim();
-      if (!trimmed) throw new Error('Player name cannot be empty');
-      for (const p of this.players.values()) {
-        if (p.id !== playerId && p.name === trimmed && p.ownerId === player.ownerId) {
-          throw new Error(`Player "${trimmed}" already exists`);
-        }
-      }
-      player.name = trimmed;
-    }
+    const nextName =
+      updates.name !== undefined ? updates.name.trim() : player.name;
+    if (!nextName) throw new Error('Player name cannot be empty');
 
+    let nextDuprId: string | undefined = player.duprId;
     if (updates.duprId !== undefined) {
       const trimmed = updates.duprId == null ? '' : String(updates.duprId).trim();
-      player.duprId = trimmed || undefined;
+      nextDuprId = trimmed || undefined;
     }
+
+    this.assertUniquePlayerIdentity(player.ownerId || '', nextName, nextDuprId, playerId);
+
+    player.name = nextName;
+    player.duprId = nextDuprId;
 
     await this.savePlayer(player);
     return player;
   }
 
   findPlayerByName(name: string): Player | undefined {
-    return Array.from(this.players.values()).find(p => p.name === name);
+    const key = name.trim().toLowerCase();
+    return Array.from(this.players.values()).find(
+      p => p.name.trim().toLowerCase() === key
+    );
+  }
+
+  findPlayerByDuprId(duprId: string, ownerId?: string): Player | undefined {
+    const key = duprId.trim().toLowerCase();
+    if (!key) return undefined;
+    return Array.from(this.players.values()).find(p => {
+      if (ownerId && p.ownerId !== ownerId) return false;
+      return !!p.duprId && p.duprId.trim().toLowerCase() === key;
+    });
   }
 
   // Event operations
@@ -549,6 +595,23 @@ export class Database {
       'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId]
     );
+    return event;
+  }
+
+  /**
+   * Create an unstarted copy of an event that imports only registered players
+   * (no games, history, start/end state, or share links).
+   */
+  async copyEvent(sourceEventId: string, name: string, ownerId: string): Promise<Event> {
+    const source = this.events.get(sourceEventId);
+    if (!source) throw new Error('Event not found');
+
+    const event = await this.createEvent(name, source.totalGamesToPlay, source.courts, ownerId);
+    for (const player of source.players.values()) {
+      const canonical = this.players.get(player.id) || player;
+      event.addPlayer(canonical);
+    }
+    await this.persistEvent(event.id);
     return event;
   }
 

@@ -8,4 +8,6 @@ export interface EventPlayerRegistration {
   targetGames: number;
   partners: string[];
   priority: number;
+  /** Per-event display letter; independent of the shared Player. */
+  nickName?: string;
 }

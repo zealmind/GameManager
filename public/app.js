@@ -972,10 +972,14 @@ async function loadEventsList() {
             const isShared = sharedIds.has(e.id) || (e.sharedAccess && e.sharedAccess.length > 0);
             const isOwner = currentUser && e.ownerId === currentUser.id;
             let actionHtml = '';
-            if (isOwner && isShared) {
-                actionHtml = `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> <span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
-            } else if (isOwner) {
-                actionHtml = `<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
+            if (isOwner) {
+                const unshare = isShared
+                    ? `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> `
+                    : '';
+                actionHtml = `
+                    <span class="delete-link rename-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Rename</span>
+                    <span class="delete-link copy-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Copy</span>
+                    ${unshare}<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
             } else {
                 actionHtml = '<span class="text-muted" style="font-size:11px;">Shared</span>';
             }
@@ -985,14 +989,26 @@ async function loadEventsList() {
                     <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
                     <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
-                ${actionHtml}
+                <div class="list-item-actions">${actionHtml}</div>
             </div>
         `;
         }).join('');
         container.querySelectorAll('.list-item').forEach(item => {
             item.addEventListener('click', (e) => {
-                if (e.target.classList.contains('delete-event-btn')) return;
+                if (e.target.closest('.list-item-actions')) return;
                 openEventDetail(item.dataset.eventId);
+            });
+        });
+        container.querySelectorAll('.rename-event-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openRenameEventModal(btn.dataset.eventId, btn.dataset.eventName || '');
+            });
+        });
+        container.querySelectorAll('.copy-event-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openCopyEventModal(btn.dataset.eventId, btn.dataset.eventName || '');
             });
         });
         container.querySelectorAll('.delete-event-btn').forEach(btn => {
@@ -1089,6 +1105,102 @@ function openCreateEventModal() {
             overlay.remove();
             loadEventsList();
             showToast('Event created!');
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function openRenameEventModal(eventId, currentName) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Rename Event</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="rename-event-form">
+                <div class="form-group">
+                    <label>Event Name</label>
+                    <input type="text" name="name" required value="${escapeHtml(currentName)}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const nameInput = overlay.querySelector('input[name="name"]');
+    if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+    }
+    document.getElementById('rename-event-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = (new FormData(e.target).get('name') || '').trim();
+        if (!name) {
+            showToast('Event Name is required');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ name })
+            });
+            overlay.remove();
+            loadEventsList();
+            showToast('Event renamed');
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function openCopyEventModal(eventId, currentName) {
+    const defaultName = currentName ? `Copy of ${currentName}` : 'Copy of Event';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Copy Event</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <p class="text-muted" style="font-size:13px; margin:0 0 12px;">Creates a new unstarted event with the same players. Games and scores are not copied.</p>
+            <form id="copy-event-form">
+                <div class="form-group">
+                    <label>New Event Name</label>
+                    <input type="text" name="name" required value="${escapeHtml(defaultName)}">
+                </div>
+                <button type="submit" class="btn btn-primary">Create Copy</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const nameInput = overlay.querySelector('input[name="name"]');
+    if (nameInput) {
+        nameInput.focus();
+        nameInput.select();
+    }
+    document.getElementById('copy-event-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = (new FormData(e.target).get('name') || '').trim();
+        if (!name) {
+            showToast('Event Name is required');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}/copy`, {
+                method: 'POST',
+                body: JSON.stringify({ name })
+            });
+            overlay.remove();
+            loadEventsList();
+            showToast('Event copied');
         } catch (err) {
             showToast(err.message);
         }
@@ -2104,6 +2216,112 @@ function buildPlayedWithSheetRows(event) {
     return [header, ...rows];
 }
 
+/** YYYY-MM-DD for DUPR import (local calendar date). */
+function formatDuprDate(raw) {
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/**
+ * DUPR score-sheet import format (doubles / SIDEOUT).
+ * Columns match DUPR's SCORE_SHEET_DUPR_FORMAT CSV.
+ */
+function buildDuprSheetRows(event, status, completedGames) {
+    const players = status.players || [];
+    const playerMap = new Map(players.map(p => [p.id, p]));
+    const eventName = event.name || status.eventName || '';
+    const date =
+        formatDuprDate(event.startedAt) ||
+        formatDuprDate(status.startedAt) ||
+        formatDuprDate(completedGames?.[0]?.completedAt) ||
+        formatDuprDate(completedGames?.[0]?.startedAt);
+    const location = 'goPlay, Chennai, India';
+    const header = excelRow([
+        excelCell('matchType'),
+        excelCell('event'),
+        excelCell('date'),
+        excelCell('playerA1'),
+        excelCell('playerA1DuprId'),
+        excelCell('playerA1ExternalId'),
+        excelCell('playerA2'),
+        excelCell('playerA2DuprId'),
+        excelCell('playerA2ExternalId'),
+        excelCell('playerB1'),
+        excelCell('playerB1DuprId'),
+        excelCell('playerB1ExternalId'),
+        excelCell('playerB2'),
+        excelCell('playerB2DuprId'),
+        excelCell('playerB2ExternalId'),
+        excelCell('teamAGame1'),
+        excelCell('teamBGame1'),
+        excelCell('teamAGame2'),
+        excelCell('teamBGame2'),
+        excelCell('teamAGame3'),
+        excelCell('teamBGame3'),
+        excelCell('teamAGame4'),
+        excelCell('teamBGame4'),
+        excelCell('teamAGame5'),
+        excelCell('teamBGame5'),
+        excelCell('location'),
+        excelCell('scoreType'),
+    ]);
+
+    const resolve = (playerId) => {
+        const p = playerMap.get(playerId);
+        return {
+            name: p?.name || (playerId ? String(playerId).slice(0, 8) : ''),
+            duprId: p?.duprId || '',
+        };
+    };
+
+    const rows = (completedGames || []).map(g => {
+        const team1 = g.players?.team1 || [];
+        const team2 = g.players?.team2 || [];
+        const a1 = resolve(team1[0]);
+        const a2 = resolve(team1[1]);
+        const b1 = resolve(team2[0]);
+        const b2 = resolve(team2[1]);
+        const scoreA = g.scores?.[0];
+        const scoreB = g.scores?.[1];
+        return excelRow([
+            excelCell('D'),
+            excelCell(eventName),
+            excelCell(date),
+            excelCell(a1.name),
+            excelCell(a1.duprId),
+            excelCell(''),
+            excelCell(a2.name),
+            excelCell(a2.duprId),
+            excelCell(''),
+            excelCell(b1.name),
+            excelCell(b1.duprId),
+            excelCell(''),
+            excelCell(b2.name),
+            excelCell(b2.duprId),
+            excelCell(''),
+            excelCell(scoreA ?? '', scoreA != null ? 'Number' : 'String'),
+            excelCell(scoreB ?? '', scoreB != null ? 'Number' : 'String'),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(location),
+            excelCell('SIDEOUT'),
+        ]);
+    });
+
+    return [header, ...rows];
+}
+
 function buildExcelWorkbookXml(sheets) {
     const worksheets = sheets.map(sheet => `
  <Worksheet ss:Name="${escapeXml(sheet.name)}">
@@ -2136,6 +2354,7 @@ function downloadEventExcel(event, status, completedGames) {
         { name: 'Leader Board', rows: buildLeaderBoardSheetRows(status, completedGames) },
         { name: 'Game Stats', rows: buildGameStatsSheetRows(status, completedGames) },
         { name: 'Who Played with Who', rows: buildPlayedWithSheetRows(event) },
+        { name: 'DUPR Import', rows: buildDuprSheetRows(event, status, completedGames) },
     ]);
 
     const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
@@ -2444,7 +2663,7 @@ function openAddPlayersModal(eventId, selectedIds) {
             </div>
             <div class="form-group">
                 <label>Search / Add New</label>
-                <input type="text" id="player-search" placeholder="Type name and press Enter to add">
+                <input type="text" id="player-search" placeholder="Type name or DUPR ID, Enter to add" autocomplete="off">
             </div>
             <div id="available-players-list">Loading...</div>
             <button type="button" class="btn btn-primary mt-2" id="confirm-add-players">Add Selected</button>
@@ -2456,19 +2675,42 @@ function openAddPlayersModal(eventId, selectedIds) {
 
     let allPlayers = [];
     let selected = new Set(selectedIds);
+    let searchQuery = '';
 
     api(`${API_BASE}/players`).then(players => {
         allPlayers = players;
         renderPlayerCheckboxes();
     });
 
+    function playerMatchesQuery(player, query) {
+        if (!query) return true;
+        const q = query.toLowerCase();
+        if (player.name.toLowerCase().includes(q)) return true;
+        if (player.duprId && String(player.duprId).toLowerCase().includes(q)) return true;
+        return false;
+    }
+
+    function findExactPlayerMatch(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) return null;
+        return allPlayers.find(p =>
+            p.name.trim().toLowerCase() === q ||
+            (p.duprId && String(p.duprId).trim().toLowerCase() === q)
+        ) || null;
+    }
+
     function renderPlayerCheckboxes() {
         const container = document.getElementById('available-players-list');
+        const filtered = allPlayers.filter(p => playerMatchesQuery(p, searchQuery));
         if (!allPlayers.length) {
-            container.innerHTML = '<div class="text-muted">No players available. Add one below.</div>';
+            container.innerHTML = '<div class="text-muted">No players available. Type a name and press Enter to add.</div>';
             return;
         }
-        container.innerHTML = allPlayers.map(p => `
+        if (!filtered.length) {
+            container.innerHTML = '<div class="text-muted">No matching players. Press Enter to create a new one.</div>';
+            return;
+        }
+        container.innerHTML = filtered.map(p => `
             <label class="player-checkbox-row">
                 <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}>
                 <span>${escapeHtml(withDuprId(p.name, p))}</span>
@@ -2482,21 +2724,49 @@ function openAddPlayersModal(eventId, selectedIds) {
         });
     }
 
-    document.getElementById('player-search').addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            const name = e.target.value.trim();
-            if (!name) return;
-            try {
-                const player = await api(`${API_BASE}/players`, {
-                    method: 'POST',
-                    body: JSON.stringify({ name })
-                });
-                allPlayers.push(player);
-                selected.add(player.id);
-                renderPlayerCheckboxes();
+    const searchInput = document.getElementById('player-search');
+    searchInput.addEventListener('input', () => {
+        searchQuery = searchInput.value.trim();
+        renderPlayerCheckboxes();
+    });
+
+    searchInput.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const query = e.target.value.trim();
+        if (!query) return;
+
+        const existing = findExactPlayerMatch(query);
+        if (existing) {
+            selected.add(existing.id);
+            e.target.value = '';
+            searchQuery = '';
+            renderPlayerCheckboxes();
+            showToast(`Selected ${withDuprId(existing.name, existing)}`);
+            return;
+        }
+
+        try {
+            const player = await api(`${API_BASE}/players`, {
+                method: 'POST',
+                body: JSON.stringify({ name: query })
+            });
+            allPlayers.push(player);
+            selected.add(player.id);
+            e.target.value = '';
+            searchQuery = '';
+            renderPlayerCheckboxes();
+        } catch (err) {
+            // Name may already exist under a different casing; try selecting it.
+            const fallback = findExactPlayerMatch(query) ||
+                allPlayers.find(p => p.name.trim().toLowerCase() === query.toLowerCase());
+            if (fallback) {
+                selected.add(fallback.id);
                 e.target.value = '';
-            } catch (err) {
+                searchQuery = '';
+                renderPlayerCheckboxes();
+                showToast(`Selected ${withDuprId(fallback.name, fallback)}`);
+            } else {
                 showToast(err.message);
             }
         }
@@ -2614,6 +2884,7 @@ function openCreatePlayerModal() {
                     <label>DUPR ID <span class="text-muted">(optional)</span></label>
                     <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
                 </div>
+                <p id="create-player-error" class="auth-error hidden"></p>
                 <button type="submit" class="btn btn-primary">Create Player</button>
             </form>
         </div>
@@ -2621,18 +2892,34 @@ function openCreatePlayerModal() {
     document.body.appendChild(overlay);
     overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const errorEl = document.getElementById('create-player-error');
+    const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+        showToast(msg);
+    };
     document.getElementById('create-player-form').addEventListener('submit', async (e) => {
         e.preventDefault();
+        errorEl.classList.add('hidden');
         const fd = new FormData(e.target);
         const name = String(fd.get('name') || '').trim();
         const duprId = String(fd.get('duprId') || '').trim();
         if (!name) return;
         try {
             const existing = await api(`${API_BASE}/players`);
-            const duplicate = existing.find(p => p.name.toLowerCase() === name.toLowerCase());
-            if (duplicate) {
-                showToast(`Player "${name}" already exists. Use a different name.`);
+            const duplicateName = existing.find(p => p.name.toLowerCase() === name.toLowerCase());
+            if (duplicateName) {
+                showError(`Player "${name}" already exists. Use a different name.`);
                 return;
+            }
+            if (duprId) {
+                const duplicateDupr = existing.find(
+                    p => p.duprId && String(p.duprId).toLowerCase() === duprId.toLowerCase()
+                );
+                if (duplicateDupr) {
+                    showError(`DUPR ID "${duprId}" already exists on "${duplicateDupr.name}".`);
+                    return;
+                }
             }
             const body = { name };
             if (duprId) body.duprId = duprId;
@@ -2644,7 +2931,7 @@ function openCreatePlayerModal() {
             loadPlayersList();
             showToast('Player created!');
         } catch (err) {
-            showToast(err.message);
+            showError(err.message);
         }
     });
 }
@@ -2667,6 +2954,7 @@ function openEditPlayerModal(player) {
                     <label>DUPR ID <span class="text-muted">(optional)</span></label>
                     <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
                 </div>
+                <p id="edit-player-error" class="auth-error hidden"></p>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </form>
         </div>
@@ -2675,15 +2963,41 @@ function openEditPlayerModal(player) {
     const form = document.getElementById('edit-player-form');
     form.name.value = player.name || '';
     form.duprId.value = player.duprId || '';
+    const errorEl = document.getElementById('edit-player-error');
+    const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+        showToast(msg);
+    };
     overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        errorEl.classList.add('hidden');
         const fd = new FormData(e.target);
         const name = String(fd.get('name') || '').trim();
         const duprId = String(fd.get('duprId') || '').trim();
         if (!name) return;
         try {
+            const existing = await api(`${API_BASE}/players`);
+            const duplicateName = existing.find(
+                p => p.id !== player.id && p.name.toLowerCase() === name.toLowerCase()
+            );
+            if (duplicateName) {
+                showError(`Player "${name}" already exists. Use a different name.`);
+                return;
+            }
+            if (duprId) {
+                const duplicateDupr = existing.find(
+                    p => p.id !== player.id &&
+                        p.duprId &&
+                        String(p.duprId).toLowerCase() === duprId.toLowerCase()
+                );
+                if (duplicateDupr) {
+                    showError(`DUPR ID "${duprId}" already exists on "${duplicateDupr.name}".`);
+                    return;
+                }
+            }
             await api(`${API_BASE}/players/${player.id}`, {
                 method: 'PATCH',
                 body: JSON.stringify({ name, duprId })
@@ -2692,7 +3006,7 @@ function openEditPlayerModal(player) {
             loadPlayersList();
             showToast('Player updated');
         } catch (err) {
-            showToast(err.message);
+            showError(err.message);
         }
     });
 }

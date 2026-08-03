@@ -52,6 +52,8 @@ app.get('/api', (req, res) => {
         create: 'POST /events',
         list: 'GET /events',
         get: 'GET /events/:eventId',
+        rename: 'PATCH /events/:eventId',
+        copy: 'POST /events/:eventId/copy',
         status: 'GET /events/:eventId/status'
       },
       players: {

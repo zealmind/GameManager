@@ -81,7 +81,9 @@ class MockClient {
         gamesPlayedCount: args[2],
         status: args[3],
         targetGames: args[4],
-        partners: JSON.parse(args[5] || '[]')
+        partners: JSON.parse(args[5] || '[]'),
+        priority: args[6],
+        nick_name: args[7] ?? null,
       };
     }
     if (table === 'games') {
