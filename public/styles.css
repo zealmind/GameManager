@@ -1029,7 +1029,7 @@ html, body {
 .justify-between { justify-content: space-between; }
 .items-center { align-items: center; }
 
-/* Toast */
+/* Toast — above modals (1001) so create/edit validation is visible */
 .toast {
     position: fixed;
     bottom: 70px;
@@ -1040,10 +1040,10 @@ html, body {
     padding: 10px 16px;
     border-radius: 8px;
     font-size: 13px;
-    z-index: 300;
+    z-index: 2000;
     opacity: 0;
     transition: all 0.3s ease;
-    white-space: nowrap;
+    white-space: normal;
     max-width: 90%;
     text-align: center;
 }

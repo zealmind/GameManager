@@ -2663,7 +2663,7 @@ function openAddPlayersModal(eventId, selectedIds) {
             </div>
             <div class="form-group">
                 <label>Search / Add New</label>
-                <input type="text" id="player-search" placeholder="Type name and press Enter to add">
+                <input type="text" id="player-search" placeholder="Type name or DUPR ID, Enter to add" autocomplete="off">
             </div>
             <div id="available-players-list">Loading...</div>
             <button type="button" class="btn btn-primary mt-2" id="confirm-add-players">Add Selected</button>
@@ -2675,19 +2675,42 @@ function openAddPlayersModal(eventId, selectedIds) {
 
     let allPlayers = [];
     let selected = new Set(selectedIds);
+    let searchQuery = '';
 
     api(`${API_BASE}/players`).then(players => {
         allPlayers = players;
         renderPlayerCheckboxes();
     });
 
+    function playerMatchesQuery(player, query) {
+        if (!query) return true;
+        const q = query.toLowerCase();
+        if (player.name.toLowerCase().includes(q)) return true;
+        if (player.duprId && String(player.duprId).toLowerCase().includes(q)) return true;
+        return false;
+    }
+
+    function findExactPlayerMatch(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) return null;
+        return allPlayers.find(p =>
+            p.name.trim().toLowerCase() === q ||
+            (p.duprId && String(p.duprId).trim().toLowerCase() === q)
+        ) || null;
+    }
+
     function renderPlayerCheckboxes() {
         const container = document.getElementById('available-players-list');
+        const filtered = allPlayers.filter(p => playerMatchesQuery(p, searchQuery));
         if (!allPlayers.length) {
-            container.innerHTML = '<div class="text-muted">No players available. Add one below.</div>';
+            container.innerHTML = '<div class="text-muted">No players available. Type a name and press Enter to add.</div>';
             return;
         }
-        container.innerHTML = allPlayers.map(p => `
+        if (!filtered.length) {
+            container.innerHTML = '<div class="text-muted">No matching players. Press Enter to create a new one.</div>';
+            return;
+        }
+        container.innerHTML = filtered.map(p => `
             <label class="player-checkbox-row">
                 <input type="checkbox" value="${p.id}" ${selected.has(p.id) ? 'checked' : ''}>
                 <span>${escapeHtml(withDuprId(p.name, p))}</span>
@@ -2701,21 +2724,49 @@ function openAddPlayersModal(eventId, selectedIds) {
         });
     }
 
-    document.getElementById('player-search').addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            const name = e.target.value.trim();
-            if (!name) return;
-            try {
-                const player = await api(`${API_BASE}/players`, {
-                    method: 'POST',
-                    body: JSON.stringify({ name })
-                });
-                allPlayers.push(player);
-                selected.add(player.id);
-                renderPlayerCheckboxes();
+    const searchInput = document.getElementById('player-search');
+    searchInput.addEventListener('input', () => {
+        searchQuery = searchInput.value.trim();
+        renderPlayerCheckboxes();
+    });
+
+    searchInput.addEventListener('keydown', async (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const query = e.target.value.trim();
+        if (!query) return;
+
+        const existing = findExactPlayerMatch(query);
+        if (existing) {
+            selected.add(existing.id);
+            e.target.value = '';
+            searchQuery = '';
+            renderPlayerCheckboxes();
+            showToast(`Selected ${withDuprId(existing.name, existing)}`);
+            return;
+        }
+
+        try {
+            const player = await api(`${API_BASE}/players`, {
+                method: 'POST',
+                body: JSON.stringify({ name: query })
+            });
+            allPlayers.push(player);
+            selected.add(player.id);
+            e.target.value = '';
+            searchQuery = '';
+            renderPlayerCheckboxes();
+        } catch (err) {
+            // Name may already exist under a different casing; try selecting it.
+            const fallback = findExactPlayerMatch(query) ||
+                allPlayers.find(p => p.name.trim().toLowerCase() === query.toLowerCase());
+            if (fallback) {
+                selected.add(fallback.id);
                 e.target.value = '';
-            } catch (err) {
+                searchQuery = '';
+                renderPlayerCheckboxes();
+                showToast(`Selected ${withDuprId(fallback.name, fallback)}`);
+            } else {
                 showToast(err.message);
             }
         }
@@ -2833,6 +2884,7 @@ function openCreatePlayerModal() {
                     <label>DUPR ID <span class="text-muted">(optional)</span></label>
                     <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
                 </div>
+                <p id="create-player-error" class="auth-error hidden"></p>
                 <button type="submit" class="btn btn-primary">Create Player</button>
             </form>
         </div>
@@ -2840,18 +2892,34 @@ function openCreatePlayerModal() {
     document.body.appendChild(overlay);
     overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const errorEl = document.getElementById('create-player-error');
+    const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+        showToast(msg);
+    };
     document.getElementById('create-player-form').addEventListener('submit', async (e) => {
         e.preventDefault();
+        errorEl.classList.add('hidden');
         const fd = new FormData(e.target);
         const name = String(fd.get('name') || '').trim();
         const duprId = String(fd.get('duprId') || '').trim();
         if (!name) return;
         try {
             const existing = await api(`${API_BASE}/players`);
-            const duplicate = existing.find(p => p.name.toLowerCase() === name.toLowerCase());
-            if (duplicate) {
-                showToast(`Player "${name}" already exists. Use a different name.`);
+            const duplicateName = existing.find(p => p.name.toLowerCase() === name.toLowerCase());
+            if (duplicateName) {
+                showError(`Player "${name}" already exists. Use a different name.`);
                 return;
+            }
+            if (duprId) {
+                const duplicateDupr = existing.find(
+                    p => p.duprId && String(p.duprId).toLowerCase() === duprId.toLowerCase()
+                );
+                if (duplicateDupr) {
+                    showError(`DUPR ID "${duprId}" already exists on "${duplicateDupr.name}".`);
+                    return;
+                }
             }
             const body = { name };
             if (duprId) body.duprId = duprId;
@@ -2863,7 +2931,7 @@ function openCreatePlayerModal() {
             loadPlayersList();
             showToast('Player created!');
         } catch (err) {
-            showToast(err.message);
+            showError(err.message);
         }
     });
 }
@@ -2886,6 +2954,7 @@ function openEditPlayerModal(player) {
                     <label>DUPR ID <span class="text-muted">(optional)</span></label>
                     <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
                 </div>
+                <p id="edit-player-error" class="auth-error hidden"></p>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </form>
         </div>
@@ -2894,15 +2963,41 @@ function openEditPlayerModal(player) {
     const form = document.getElementById('edit-player-form');
     form.name.value = player.name || '';
     form.duprId.value = player.duprId || '';
+    const errorEl = document.getElementById('edit-player-error');
+    const showError = (msg) => {
+        errorEl.textContent = msg;
+        errorEl.classList.remove('hidden');
+        showToast(msg);
+    };
     overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
+        errorEl.classList.add('hidden');
         const fd = new FormData(e.target);
         const name = String(fd.get('name') || '').trim();
         const duprId = String(fd.get('duprId') || '').trim();
         if (!name) return;
         try {
+            const existing = await api(`${API_BASE}/players`);
+            const duplicateName = existing.find(
+                p => p.id !== player.id && p.name.toLowerCase() === name.toLowerCase()
+            );
+            if (duplicateName) {
+                showError(`Player "${name}" already exists. Use a different name.`);
+                return;
+            }
+            if (duprId) {
+                const duplicateDupr = existing.find(
+                    p => p.id !== player.id &&
+                        p.duprId &&
+                        String(p.duprId).toLowerCase() === duprId.toLowerCase()
+                );
+                if (duplicateDupr) {
+                    showError(`DUPR ID "${duprId}" already exists on "${duplicateDupr.name}".`);
+                    return;
+                }
+            }
             await api(`${API_BASE}/players/${player.id}`, {
                 method: 'PATCH',
                 body: JSON.stringify({ name, duprId })
@@ -2911,7 +3006,7 @@ function openEditPlayerModal(player) {
             loadPlayersList();
             showToast('Player updated');
         } catch (err) {
-            showToast(err.message);
+            showError(err.message);
         }
     });
 }

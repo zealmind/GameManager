@@ -482,15 +482,37 @@ export class Database {
     return Array.from(this.players.values()).filter(p => p.ownerId === ownerId);
   }
 
-  async createPlayer(name: string, ownerId: string, duprId?: string): Promise<Player> {
+  private assertUniquePlayerIdentity(
+    ownerId: string,
+    name: string,
+    duprId: string | undefined,
+    excludePlayerId?: string
+  ): void {
+    const nameKey = name.trim().toLowerCase();
+    const duprKey = duprId ? duprId.trim().toLowerCase() : '';
+
     for (const p of this.players.values()) {
-      if (p.name === name && p.ownerId === ownerId) {
-        throw new Error(`Player "${name}" already exists`);
+      if (p.ownerId !== ownerId) continue;
+      if (excludePlayerId && p.id === excludePlayerId) continue;
+
+      if (p.name.trim().toLowerCase() === nameKey) {
+        throw new Error(`Player "${name.trim()}" already exists`);
+      }
+      if (duprKey && p.duprId && p.duprId.trim().toLowerCase() === duprKey) {
+        throw new Error(`DUPR ID "${duprId!.trim()}" already exists`);
       }
     }
-    const player = new Player(name);
+  }
+
+  async createPlayer(name: string, ownerId: string, duprId?: string): Promise<Player> {
+    const trimmedName = name.trim();
+    if (!trimmedName) throw new Error('Player name cannot be empty');
+    const trimmedDuprId = duprId?.trim() || undefined;
+    this.assertUniquePlayerIdentity(ownerId, trimmedName, trimmedDuprId);
+
+    const player = new Player(trimmedName);
     player.ownerId = ownerId;
-    if (duprId) player.duprId = duprId;
+    if (trimmedDuprId) player.duprId = trimmedDuprId;
     this.players.set(player.id, player);
     await this.savePlayer(player);
     return player;
@@ -503,28 +525,39 @@ export class Database {
     const player = this.players.get(playerId);
     if (!player) return undefined;
 
-    if (updates.name !== undefined) {
-      const trimmed = updates.name.trim();
-      if (!trimmed) throw new Error('Player name cannot be empty');
-      for (const p of this.players.values()) {
-        if (p.id !== playerId && p.name === trimmed && p.ownerId === player.ownerId) {
-          throw new Error(`Player "${trimmed}" already exists`);
-        }
-      }
-      player.name = trimmed;
-    }
+    const nextName =
+      updates.name !== undefined ? updates.name.trim() : player.name;
+    if (!nextName) throw new Error('Player name cannot be empty');
 
+    let nextDuprId: string | undefined = player.duprId;
     if (updates.duprId !== undefined) {
       const trimmed = updates.duprId == null ? '' : String(updates.duprId).trim();
-      player.duprId = trimmed || undefined;
+      nextDuprId = trimmed || undefined;
     }
+
+    this.assertUniquePlayerIdentity(player.ownerId || '', nextName, nextDuprId, playerId);
+
+    player.name = nextName;
+    player.duprId = nextDuprId;
 
     await this.savePlayer(player);
     return player;
   }
 
   findPlayerByName(name: string): Player | undefined {
-    return Array.from(this.players.values()).find(p => p.name === name);
+    const key = name.trim().toLowerCase();
+    return Array.from(this.players.values()).find(
+      p => p.name.trim().toLowerCase() === key
+    );
+  }
+
+  findPlayerByDuprId(duprId: string, ownerId?: string): Player | undefined {
+    const key = duprId.trim().toLowerCase();
+    if (!key) return undefined;
+    return Array.from(this.players.values()).find(p => {
+      if (ownerId && p.ownerId !== ownerId) return false;
+      return !!p.duprId && p.duprId.trim().toLowerCase() === key;
+    });
   }
 
   // Event operations
