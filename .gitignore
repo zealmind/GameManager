@@ -5,3 +5,7 @@ db.json
 .vercel
 .env
 backup.sql
+local.db.db
+local.db
+local.db-shm
+local.db-wal
