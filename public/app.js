@@ -2216,6 +2216,112 @@ function buildPlayedWithSheetRows(event) {
     return [header, ...rows];
 }
 
+/** YYYY-MM-DD for DUPR import (local calendar date). */
+function formatDuprDate(raw) {
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '';
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
+/**
+ * DUPR score-sheet import format (doubles / SIDEOUT).
+ * Columns match DUPR's SCORE_SHEET_DUPR_FORMAT CSV.
+ */
+function buildDuprSheetRows(event, status, completedGames) {
+    const players = status.players || [];
+    const playerMap = new Map(players.map(p => [p.id, p]));
+    const eventName = event.name || status.eventName || '';
+    const date =
+        formatDuprDate(event.startedAt) ||
+        formatDuprDate(status.startedAt) ||
+        formatDuprDate(completedGames?.[0]?.completedAt) ||
+        formatDuprDate(completedGames?.[0]?.startedAt);
+    const location = 'goPlay, Chennai, India';
+    const header = excelRow([
+        excelCell('matchType'),
+        excelCell('event'),
+        excelCell('date'),
+        excelCell('playerA1'),
+        excelCell('playerA1DuprId'),
+        excelCell('playerA1ExternalId'),
+        excelCell('playerA2'),
+        excelCell('playerA2DuprId'),
+        excelCell('playerA2ExternalId'),
+        excelCell('playerB1'),
+        excelCell('playerB1DuprId'),
+        excelCell('playerB1ExternalId'),
+        excelCell('playerB2'),
+        excelCell('playerB2DuprId'),
+        excelCell('playerB2ExternalId'),
+        excelCell('teamAGame1'),
+        excelCell('teamBGame1'),
+        excelCell('teamAGame2'),
+        excelCell('teamBGame2'),
+        excelCell('teamAGame3'),
+        excelCell('teamBGame3'),
+        excelCell('teamAGame4'),
+        excelCell('teamBGame4'),
+        excelCell('teamAGame5'),
+        excelCell('teamBGame5'),
+        excelCell('location'),
+        excelCell('scoreType'),
+    ]);
+
+    const resolve = (playerId) => {
+        const p = playerMap.get(playerId);
+        return {
+            name: p?.name || (playerId ? String(playerId).slice(0, 8) : ''),
+            duprId: p?.duprId || '',
+        };
+    };
+
+    const rows = (completedGames || []).map(g => {
+        const team1 = g.players?.team1 || [];
+        const team2 = g.players?.team2 || [];
+        const a1 = resolve(team1[0]);
+        const a2 = resolve(team1[1]);
+        const b1 = resolve(team2[0]);
+        const b2 = resolve(team2[1]);
+        const scoreA = g.scores?.[0];
+        const scoreB = g.scores?.[1];
+        return excelRow([
+            excelCell('D'),
+            excelCell(eventName),
+            excelCell(date),
+            excelCell(a1.name),
+            excelCell(a1.duprId),
+            excelCell(''),
+            excelCell(a2.name),
+            excelCell(a2.duprId),
+            excelCell(''),
+            excelCell(b1.name),
+            excelCell(b1.duprId),
+            excelCell(''),
+            excelCell(b2.name),
+            excelCell(b2.duprId),
+            excelCell(''),
+            excelCell(scoreA ?? '', scoreA != null ? 'Number' : 'String'),
+            excelCell(scoreB ?? '', scoreB != null ? 'Number' : 'String'),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(''),
+            excelCell(location),
+            excelCell('SIDEOUT'),
+        ]);
+    });
+
+    return [header, ...rows];
+}
+
 function buildExcelWorkbookXml(sheets) {
     const worksheets = sheets.map(sheet => `
  <Worksheet ss:Name="${escapeXml(sheet.name)}">
@@ -2248,6 +2354,7 @@ function downloadEventExcel(event, status, completedGames) {
         { name: 'Leader Board', rows: buildLeaderBoardSheetRows(status, completedGames) },
         { name: 'Game Stats', rows: buildGameStatsSheetRows(status, completedGames) },
         { name: 'Who Played with Who', rows: buildPlayedWithSheetRows(event) },
+        { name: 'DUPR Import', rows: buildDuprSheetRows(event, status, completedGames) },
     ]);
 
     const blob = new Blob([xml], { type: 'application/vnd.ms-excel' });
