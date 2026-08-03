@@ -303,9 +303,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
   try {
     const event = req.event;
 
-    const players = Array.from(event.players.values()) as Array<{ nickName?: string }>;
-    if (event.isStarted() && players.some(p => !p.nickName)) {
-      event.assignNickNames();
+    if (event.isStarted() && event.assignNickNames()) {
       await db.persistEvent(req.params.eventId as string);
     }
 
@@ -372,7 +370,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
         return {
           id: p.id,
           name: p.name,
-          nickName: p.nickName,
+          nickName: reg?.nickName,
           duprId: p.duprId,
           gamesPlayed: reg?.gamesPlayedCount || 0,
           targetGames: reg?.targetGames || 0,

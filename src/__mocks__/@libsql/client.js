@@ -133,6 +133,7 @@ class MockClient {
         targetGames: args[4],
         partners: args[5],
         priority: args[6],
+        nick_name: args[7] ?? null,
       };
       const idx = this.data.registrations.findIndex(
         i => i.eventId === row.eventId && i.playerId === row.playerId

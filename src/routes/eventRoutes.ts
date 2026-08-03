@@ -17,13 +17,16 @@ function prepareEventResponse(event: Event) {
     startedAt: event.startedAt,
     endedAt: event.endedAt,
     ownerId: ev.ownerId,
-    players: Array.from(event.players.values()).map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      nickName: p.nickName,
-      duprId: p.duprId,
-      ownerId: p.ownerId,
-    })),
+    players: Array.from(event.players.values()).map((p: any) => {
+      const reg = event.registrations.get(p.id);
+      return {
+        id: p.id,
+        name: p.name,
+        nickName: reg?.nickName,
+        duprId: p.duprId,
+        ownerId: p.ownerId,
+      };
+    }),
     registrations: Array.from(event.registrations.values()),
     games: event.games,
     gameHistory: event.gameHistory,

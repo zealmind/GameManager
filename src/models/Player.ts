@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 export class Player {
   id: string;
   name: string;
-  nickName?: string;
   /** Optional DUPR (Dynamic Universal Pickleball Rating) player ID */
   duprId?: string;
   ownerId?: string;
