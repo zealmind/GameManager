@@ -166,8 +166,8 @@ function openCourtScoreEditor(gameId) {
     scores.querySelector('.court-score-compact')?.classList.add('hidden');
     scores.querySelector('.court-score-expanded')?.classList.remove('hidden');
     card?.classList.add('is-editing-score');
-    const firstInput = scores.querySelector('.score-input');
-    try { firstInput?.focus(); firstInput?.select(); } catch {}
+    const discardBtn = scores.querySelector('.score-icon-discard');
+    try { discardBtn?.focus(); } catch {}
 }
 
 function applyScorePairToEditor(root, gameId, score1, score2) {
@@ -2624,8 +2624,8 @@ function bindEventDetailActions(eventId, event, status) {
             container.querySelectorAll(`.game-score-row[data-game-id="${gameId}"]`).forEach(el => el.classList.add('hidden'));
             container.querySelectorAll(`.game-score-edit[data-game-id="${gameId}"]`).forEach(el => el.classList.remove('hidden'));
             card?.classList.add('is-editing-score');
-            const firstInput = container.querySelector(`.game-score-edit[data-game-id="${gameId}"] .score-input`);
-            try { firstInput?.focus(); firstInput?.select(); } catch {}
+            const discardBtn = container.querySelector(`.game-score-edit[data-game-id="${gameId}"] .score-icon-discard`);
+            try { discardBtn?.focus(); } catch {}
         });
     });
 

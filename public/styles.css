@@ -1189,7 +1189,7 @@ html, body {
 }
 
 .court-game-card.is-editing-score .score-icon-btn {
-    width: 30px;
+    width: 38px;
     height: 30px;
     font-size: 14px;
 }
@@ -1296,7 +1296,7 @@ html, body {
 }
 
 .score-icon-btn {
-    width: 36px;
+    width: 44px;
     height: 36px;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -1369,7 +1369,7 @@ html, body {
 
     .score-step-btn,
     .score-icon-btn {
-        width: 30px;
+        width: 38px;
         height: 30px;
         font-size: 15px;
     }
