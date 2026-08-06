@@ -2405,10 +2405,20 @@ function bindEventDetailActions(eventId, event, status) {
 
     if (accessMode === 'viewer') {
         container.querySelectorAll('button, .btn, .icon-btn').forEach(btn => {
+            if (btn.classList.contains('leaderboard-expand-btn')) return;
             btn.style.pointerEvents = 'none';
             btn.style.opacity = '0.5';
             btn.disabled = true;
         });
+
+        // Still bind the read-only interactive controls for viewers
+        const completedGamesFilter = document.getElementById('completed-games-player-filter');
+        if (completedGamesFilter) {
+            completedGamesFilter.addEventListener('change', (e) => {
+                currentCompletedGamesFilter = e.target.value;
+                loadEventDetail(eventId);
+            });
+        }
         return;
     }
 

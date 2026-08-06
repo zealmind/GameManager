@@ -1910,14 +1910,21 @@ html, body {
     margin-left: 4px;
 }
 
-[data-readonly="true"] button,
+[data-readonly="true"] button:not(.leaderboard-expand-btn),
 [data-readonly="true"] .btn,
 [data-readonly="true"] .icon-btn,
 [data-readonly="true"] input,
-[data-readonly="true"] select {
+[data-readonly="true"] select:not(#completed-games-player-filter) {
     pointer-events: none;
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+[data-readonly="true"] .leaderboard-expand-btn,
+[data-readonly="true"] #completed-games-player-filter {
+    pointer-events: auto;
+    opacity: 1;
+    cursor: pointer;
 }
 
 [data-readonly="true"] .modal-overlay {

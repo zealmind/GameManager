@@ -82,8 +82,11 @@ app.use('/players', playerRoutes);
 app.use('/events', playerRoutes);
 app.use('/events', gameRoutes);
 
-// Serve app shell for SPA routes
+// Serve app shell for SPA routes (skip if it looks like an asset request)
 app.get('*', (req, res) => {
+  if (req.path.includes('.')) {
+    return res.status(404).send('Not found');
+  }
   res.sendFile(path.join(process.cwd(), 'public', 'index.html'));
 });
 
