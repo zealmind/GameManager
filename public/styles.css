@@ -1988,18 +1988,34 @@ html, body {
 }
 
 .played-with-matrix td.played-with-self {
-    color: var(--text-muted);
+    background: #ffffff;
+    color: #0c0c0c;
     font-style: italic;
 }
 
 .played-with-matrix td.played-with-zero {
-    background: #e5e7eb;
-    color: #6b7280;
+    background: #f3f4f6;
+    color: #9ca3af;
+}
+
+.played-with-matrix td.played-with-one {
+    background: #bbf7d0;
+    color: #166534;
+}
+
+.played-with-matrix td.played-with-two {
+    background: #fecaca;
+    color: #991b1b;
+}
+
+.played-with-matrix td.played-with-three {
+    background: #f87171;
+    color: #7f1d1d;
 }
 
 .played-with-matrix td.played-with-high {
-    background: #fecaca;
-    color: #991b1b;
+    background: #b91c1c;
+    color: #fef2f2;
 }
 
 .played-with-fullscreen {

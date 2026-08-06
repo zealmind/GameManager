@@ -1641,7 +1641,13 @@ function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = f
                 cellClass = 'played-with-self';
             } else if (count === 0) {
                 cellClass = 'played-with-zero';
-            } else if (count >= 3) {
+            } else if (count === 1) {
+                cellClass = 'played-with-one';
+            } else if (count === 2) {
+                cellClass = 'played-with-two';
+            } else if (count === 3) {
+                cellClass = 'played-with-three';
+            } else {
                 cellClass = 'played-with-high';
             }
             return `<td class="${cellClass}">${isDiagonal ? '-' : count}</td>`;

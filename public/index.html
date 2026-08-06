@@ -33,7 +33,7 @@
             </div>
         </div>
         <header class="app-header">
-            <h1>GameManager<span class="app-version"> v2.0.1</span></h1>
+            <h1>GameManager<span class="app-version" id="app-version-label"></span></h1>
             <div class="app-subtitle">Author: Raja K &bull; built with AI</div>
         </header>
     <main id="main-content">
@@ -86,5 +86,14 @@
       })();
     </script>
     <script src="app.js"></script>
+    <script>
+      fetch('/version.json?_=' + Date.now())
+        .then(function(r) { return r.json(); })
+        .then(function(v) {
+          var label = document.getElementById('app-version-label');
+          if (label) label.textContent = ' v' + v.major + '.' + v.minor + '.' + v.patch;
+        })
+        .catch(function() {});
+    </script>
 </body>
 </html>

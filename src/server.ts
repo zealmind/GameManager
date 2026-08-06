@@ -37,9 +37,14 @@ app.use('/auth', authRoutes);
 
 // API info endpoint
 app.get('/api', (req, res) => {
+  let version = 'unknown';
+  try {
+    const versionData = JSON.parse(require('fs').readFileSync(path.join(process.cwd(), 'public', 'version.json'), 'utf8'));
+    version = `${versionData.major}.${versionData.minor}.${versionData.patch}`;
+  } catch {}
   res.json({
     message: 'GameManager API is running',
-    version: '1.0.0',
+    version,
     endpoints: {
       auth: {
         register: 'POST /auth/register',
