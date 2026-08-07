@@ -1432,6 +1432,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         courtsHtml += `<div class="court-card ${stateClass}" data-court-id="${court.courtId}">
             <div class="court-row">
                 <div class="court-header">Court ${court.courtId}</div>
+                ${isPlaying ? `<div class="court-game-number">Game #${court.game.gameNumber}</div>` : ''}
                 <div class="court-status">
                     ${isPlaying ? '<span class="court-state-pill court-state-playing">In Progress</span>' : ''}
                     ${isAllotted ? '<span class="court-state-pill court-state-allotted">Allotted</span>' : ''}

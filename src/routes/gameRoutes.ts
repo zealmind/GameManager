@@ -333,6 +333,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
         isAvailable: !active,
         game: active ? {
           id: active.id,
+          gameNumber: active.gameNumber,
            team1: active.players.team1.map((id: string) => ({
              id,
              name: event.players.get(id)?.name || id.slice(0,8)

@@ -618,6 +618,19 @@ html, body {
     gap: 8px;
     margin-bottom: 8px;
     padding: 0 2px;
+    position: relative;
+}
+
+.court-game-number {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: #64748b;
+    letter-spacing: 0.06em;
+    pointer-events: none;
 }
 
 .court-header {
