@@ -166,8 +166,8 @@ function openCourtScoreEditor(gameId) {
     scores.querySelector('.court-score-compact')?.classList.add('hidden');
     scores.querySelector('.court-score-expanded')?.classList.remove('hidden');
     card?.classList.add('is-editing-score');
-    const firstInput = scores.querySelector('.score-input');
-    try { firstInput?.focus(); firstInput?.select(); } catch {}
+    const discardBtn = scores.querySelector('.score-icon-discard');
+    try { discardBtn?.focus(); } catch {}
 }
 
 function applyScorePairToEditor(root, gameId, score1, score2) {
@@ -1432,6 +1432,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         courtsHtml += `<div class="court-card ${stateClass}" data-court-id="${court.courtId}">
             <div class="court-row">
                 <div class="court-header">Court ${court.courtId}</div>
+                ${isPlaying ? `<div class="court-game-number">Game #${court.game.gameNumber}</div>` : ''}
                 <div class="court-status">
                     ${isPlaying ? '<span class="court-state-pill court-state-playing">In Progress</span>' : ''}
                     ${isAllotted ? '<span class="court-state-pill court-state-allotted">Allotted</span>' : ''}
@@ -1641,7 +1642,13 @@ function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = f
                 cellClass = 'played-with-self';
             } else if (count === 0) {
                 cellClass = 'played-with-zero';
-            } else if (count >= 3) {
+            } else if (count === 1) {
+                cellClass = 'played-with-one';
+            } else if (count === 2) {
+                cellClass = 'played-with-two';
+            } else if (count === 3) {
+                cellClass = 'played-with-three';
+            } else {
                 cellClass = 'played-with-high';
             }
             return `<td class="${cellClass}">${isDiagonal ? '-' : count}</td>`;
@@ -2399,10 +2406,20 @@ function bindEventDetailActions(eventId, event, status) {
 
     if (accessMode === 'viewer') {
         container.querySelectorAll('button, .btn, .icon-btn').forEach(btn => {
+            if (btn.classList.contains('leaderboard-expand-btn')) return;
             btn.style.pointerEvents = 'none';
             btn.style.opacity = '0.5';
             btn.disabled = true;
         });
+
+        // Still bind the read-only interactive controls for viewers
+        const completedGamesFilter = document.getElementById('completed-games-player-filter');
+        if (completedGamesFilter) {
+            completedGamesFilter.addEventListener('change', (e) => {
+                currentCompletedGamesFilter = e.target.value;
+                loadEventDetail(eventId);
+            });
+        }
         return;
     }
 
@@ -2624,8 +2641,8 @@ function bindEventDetailActions(eventId, event, status) {
             container.querySelectorAll(`.game-score-row[data-game-id="${gameId}"]`).forEach(el => el.classList.add('hidden'));
             container.querySelectorAll(`.game-score-edit[data-game-id="${gameId}"]`).forEach(el => el.classList.remove('hidden'));
             card?.classList.add('is-editing-score');
-            const firstInput = container.querySelector(`.game-score-edit[data-game-id="${gameId}"] .score-input`);
-            try { firstInput?.focus(); firstInput?.select(); } catch {}
+            const discardBtn = container.querySelector(`.game-score-edit[data-game-id="${gameId}"] .score-icon-discard`);
+            try { discardBtn?.focus(); } catch {}
         });
     });
 
