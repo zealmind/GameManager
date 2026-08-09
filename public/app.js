@@ -444,7 +444,7 @@ function switchView(view) {
     editingCourtScoreGameId = null;
     courtScoreEditSnapshot = null;
     if (view === 'dashboard') {
-        renderDashboard();
+        renderDashboard(); // async, intentionally not awaited — renders incrementally
     } else if (view === 'events') {
         renderEvents();
     } else if (view === 'players') {
@@ -458,6 +458,13 @@ function getAccessMode() {
     const moderator = params.get('moderator');
     if (viewer) return { mode: 'viewer', token: viewer };
     if (moderator) return { mode: 'moderator', token: moderator };
+    // Don't restore a stored share token when the user is logged in —
+    // their JWT takes precedence and the share session should not persist
+    // across a regular login navigation.
+    if (getToken()) {
+        sessionStorage.removeItem('gm_access');
+        return null;
+    }
     const stored = sessionStorage.getItem('gm_access');
     if (stored) {
         try {
@@ -608,6 +615,7 @@ async function initWelcomeScreen() {
                 }
             } else {
                 clearWelcomeError();
+                clearAccessMode(); // discard any stale share token from a previous session
                 dismissWelcomeScreen();
                 switchView('dashboard');
             }
@@ -906,7 +914,21 @@ function switchAuthTab(tab) {
     document.getElementById('auth-error').classList.add('hidden');
 }
 
-function renderDashboard() {
+async function renderDashboard() {
+    // currentUser may be null if we transitioned from share/guest mode.
+    // Fetch the logged-in user before rendering so the name and avatar are correct.
+    if (!currentUser && getToken()) {
+        try {
+            const data = await api(`${API_BASE}/auth/me`, { timeoutMs: 8000 });
+            setUser(data.user);
+        } catch (err) {
+            // Token invalid — clear it and bail out to login
+            clearUser();
+            showLoginModal();
+            return;
+        }
+    }
+
     const user = currentUser || { name: 'Player', email: '' };
     app.innerHTML = `
         <div class="dashboard-header">
