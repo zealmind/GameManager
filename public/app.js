@@ -433,6 +433,11 @@ async function api(url, options = {}) {
 }
 
 function switchView(view) {
+    // Shared/moderator users have no dashboard or other views — send them back to root.
+    if (accessMode === 'viewer' || accessMode === 'moderator') {
+        window.location.href = '/';
+        return;
+    }
     navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
     document.body.classList.remove('hide-bottom-nav');
     if (eventDetailPollInterval) {
