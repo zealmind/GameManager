@@ -771,7 +771,11 @@ function logout() {
 function dismissWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
-    if (screen) screen.classList.remove('active');
+    if (screen) {
+        screen.classList.remove('active');
+        // Fully remove from layout so it cannot intercept touches on any device
+        screen.style.display = 'none';
+    }
     if (video) video.pause();
 }
 
