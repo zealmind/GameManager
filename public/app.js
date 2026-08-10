@@ -1541,7 +1541,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         if (!players.length) return '';
         const sorted = sortPlayersByNickName(players, nickNameMap);
         return `
-            <div class="player-group">
+            <div class="player-group" data-group-key="${title.toLowerCase()}">
                 <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
                 <div class="player-group-content">
                     ${sorted.map(p => `
@@ -1838,7 +1838,14 @@ function togglePlayerGroup(header) {
     if (content && content.classList.contains('player-group-content')) {
         const isHidden = content.style.display === 'none';
         content.style.display = isHidden ? 'block' : 'none';
-        header.innerHTML = header.innerHTML.replace(/ \&#9662;| \&#9652;/, '') + (isHidden ? ' &#9662;' : ' &#9652;');
+        // Strip both the HTML entity form and the rendered unicode character form
+        header.innerHTML = header.innerHTML.replace(/ (?:&#9662;|&#9652;|\u25BE|\u25B4|\u25BC|\u25B2|\u25BE|\u25B4)/g, '') + (isHidden ? ' &#9662;' : ' &#9652;');
+        // Persist collapsed state
+        const group = header.closest('[data-group-key]');
+        if (group && currentEventId) {
+            const key = `gm_event_${currentEventId}_group_${group.dataset.groupKey}_collapsed`;
+            localStorage.setItem(key, String(!isHidden));
+        }
     }
 }
 
@@ -1932,6 +1939,18 @@ function bindCollapsibleSections(eventId, status) {
     }
 
     bindLeaderboardExpand(eventId);
+
+    // Restore per-group collapsed state (Waiting, Playing, Away, etc.)
+    document.querySelectorAll('#players-list [data-group-key]').forEach(group => {
+        const key = `gm_event_${eventId}_group_${group.dataset.groupKey}_collapsed`;
+        const stored = localStorage.getItem(key);
+        if (stored === 'true') {
+            const content = group.querySelector('.player-group-content');
+            const header = group.querySelector('.card-subtitle');
+            if (content) content.style.display = 'none';
+            if (header) header.innerHTML = header.innerHTML.replace(/ (?:&#9662;|&#9652;|\u25BE|\u25B4|\u25BC|\u25B2)/g, '') + ' &#9652;';
+        }
+    });
 }
 
 function formatDuration(ms) {
