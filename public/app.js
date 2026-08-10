@@ -434,6 +434,7 @@ async function api(url, options = {}) {
 
 function switchView(view) {
     navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    document.body.classList.remove('hide-bottom-nav');
     if (eventDetailPollInterval) {
         clearInterval(eventDetailPollInterval);
         eventDetailPollInterval = null;
@@ -461,6 +462,9 @@ function getAccessMode() {
     // Don't restore a stored share token when the user is logged in —
     // their JWT takes precedence and the share session should not persist
     // across a regular login navigation.
+    // However, only suppress the share session if the JWT is present AND
+    // there is no share token in the URL (already handled above) — this
+    // prevents an expired JWT from blocking a fresh share-link visit.
     if (getToken()) {
         sessionStorage.removeItem('gm_access');
         return null;
@@ -1237,6 +1241,11 @@ function openCopyEventModal(eventId, currentName) {
 async function openEventDetail(eventId, fromShare = false) {
     currentEventId = eventId;
     navBtns.forEach(b => b.classList.remove('active'));
+    // Hide the bottom nav for shared/moderator access — Dashboard and Players
+    // are irrelevant and inaccessible without a full account.
+    if (accessMode === 'viewer' || accessMode === 'moderator') {
+        document.body.classList.add('hide-bottom-nav');
+    }
     app.innerHTML = `
         <div class="app-header">
             ${showBackButton()}

@@ -168,6 +168,10 @@ html, body {
     padding: 6px 0;
 }
 
+body.hide-bottom-nav .bottom-nav {
+    display: none;
+}
+
 .nav-btn {
     flex: 1;
     display: flex;
