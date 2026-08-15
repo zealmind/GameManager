@@ -752,7 +752,10 @@ function logout() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
     const btn = document.getElementById('enter-btn');
-    if (screen) screen.classList.add('active');
+    if (screen) {
+        screen.style.display = '';  // undo the display:none set by dismissWelcomeScreen
+        screen.classList.add('active');
+    }
     if (video) {
         video.currentTime = 0;
         video.play().catch(() => {});
@@ -2778,7 +2781,10 @@ function openAddPlayersModal(eventId, selectedIds) {
             </div>
             <div class="form-group">
                 <label>Search / Add New</label>
-                <input type="text" id="player-search" placeholder="Type name or DUPR ID, Enter to add" autocomplete="off">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="text" id="player-search" placeholder="Type name or DUPR ID..." autocomplete="off" style="flex:1">
+                    <button type="button" id="create-player-inline-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;font-size:1.2rem;line-height:1;padding:4px 10px;">+</button>
+                </div>
             </div>
             <div id="available-players-list">Loading...</div>
             <button type="button" class="btn btn-primary mt-2" id="confirm-add-players">Add Selected</button>
@@ -2792,7 +2798,7 @@ function openAddPlayersModal(eventId, selectedIds) {
     let selected = new Set(selectedIds);
     let searchQuery = '';
 
-    api(`${API_BASE}/players`).then(players => {
+    api(`${API_BASE}/players/all`).then(players => {
         allPlayers = players;
         renderPlayerCheckboxes();
     });
@@ -2814,15 +2820,27 @@ function openAddPlayersModal(eventId, selectedIds) {
         ) || null;
     }
 
+    function hasNoMatch(query) {
+        if (!query) return false;
+        return allPlayers.filter(p => playerMatchesQuery(p, query)).length === 0;
+    }
+
+    function updateCreateBtn() {
+        const btn = document.getElementById('create-player-inline-btn');
+        if (btn) btn.style.display = searchQuery && hasNoMatch(searchQuery) ? '' : 'none';
+    }
+
     function renderPlayerCheckboxes() {
         const container = document.getElementById('available-players-list');
         const filtered = allPlayers.filter(p => playerMatchesQuery(p, searchQuery));
         if (!allPlayers.length) {
-            container.innerHTML = '<div class="text-muted">No players available. Type a name and press Enter to add.</div>';
+            container.innerHTML = '<div class="text-muted">No players yet. Type a name and press Enter or tap <strong>+</strong> to create one.</div>';
+            updateCreateBtn();
             return;
         }
         if (!filtered.length) {
-            container.innerHTML = '<div class="text-muted">No matching players. Press Enter to create a new one.</div>';
+            container.innerHTML = '<div class="text-muted">No matching players. Press Enter or tap <strong>+</strong> to create a new one.</div>';
+            updateCreateBtn();
             return;
         }
         container.innerHTML = filtered.map(p => `
@@ -2837,6 +2855,82 @@ function openAddPlayersModal(eventId, selectedIds) {
                 else selected.delete(e.target.value);
             });
         });
+        updateCreateBtn();
+    }
+
+    // Opens the create-player sub-dialog, pre-filling name with the current search query.
+    function openCreatePlayerDialog() {
+        const prefill = searchQuery;
+        const dlg = document.createElement('div');
+        dlg.className = 'modal-overlay active';
+        dlg.style.zIndex = '1100';
+        dlg.innerHTML = `
+            <div class="modal">
+                <div class="modal-header">
+                    <div class="modal-title">Create New Player</div>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <form id="inline-create-player-form">
+                    <div class="form-group">
+                        <label>Player Name</label>
+                        <input type="text" name="name" required placeholder="Enter player name" value="${escapeHtml(prefill)}">
+                    </div>
+                    <div class="form-group">
+                        <label>DUPR ID <span class="text-muted">(optional)</span></label>
+                        <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
+                    </div>
+                    <p id="inline-create-player-error" class="auth-error hidden"></p>
+                    <button type="submit" class="btn btn-primary">Create &amp; Select</button>
+                </form>
+            </div>
+        `;
+        document.body.appendChild(dlg);
+        dlg.querySelector('.modal-close').addEventListener('click', () => dlg.remove());
+        dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.remove(); });
+        // Focus the name field at end of pre-filled text
+        const nameInput = dlg.querySelector('input[name="name"]');
+        nameInput.focus();
+        nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
+
+        const errorEl = dlg.querySelector('#inline-create-player-error');
+        dlg.querySelector('#inline-create-player-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.classList.add('hidden');
+            const fd = new FormData(e.target);
+            const name = String(fd.get('name') || '').trim();
+            const duprId = String(fd.get('duprId') || '').trim();
+            if (!name) return;
+            try {
+                const player = await api(`${API_BASE}/players`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name, ...(duprId ? { duprId } : {}) })
+                });
+                allPlayers.push(player);
+                selected.add(player.id);
+                // Clear search so the new player is visible in the list
+                const searchInput = document.getElementById('player-search');
+                if (searchInput) { searchInput.value = ''; }
+                searchQuery = '';
+                renderPlayerCheckboxes();
+                dlg.remove();
+                showToast(`Player "${escapeHtml(player.name)}" created and selected`);
+            } catch (err) {
+                // If already exists globally, just select it
+                const fallback = allPlayers.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+                if (fallback) {
+                    selected.add(fallback.id);
+                    const searchInput = document.getElementById('player-search');
+                    if (searchInput) { searchInput.value = ''; }
+                    searchQuery = '';
+                    renderPlayerCheckboxes();
+                    dlg.remove();
+                    showToast(`Selected existing player "${escapeHtml(fallback.name)}"`);
+                } else {
+                    errorEl.textContent = err.message;
+                    errorEl.classList.remove('hidden');
+                }
+            }
+        });
     }
 
     const searchInput = document.getElementById('player-search');
@@ -2845,46 +2939,29 @@ function openAddPlayersModal(eventId, selectedIds) {
         renderPlayerCheckboxes();
     });
 
-    searchInput.addEventListener('keydown', async (e) => {
+    searchInput.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        const query = e.target.value.trim();
+        const query = searchInput.value.trim();
         if (!query) return;
 
+        // If there's an exact match, just select it
         const existing = findExactPlayerMatch(query);
         if (existing) {
             selected.add(existing.id);
-            e.target.value = '';
+            searchInput.value = '';
             searchQuery = '';
             renderPlayerCheckboxes();
             showToast(`Selected ${withDuprId(existing.name, existing)}`);
             return;
         }
 
-        try {
-            const player = await api(`${API_BASE}/players`, {
-                method: 'POST',
-                body: JSON.stringify({ name: query })
-            });
-            allPlayers.push(player);
-            selected.add(player.id);
-            e.target.value = '';
-            searchQuery = '';
-            renderPlayerCheckboxes();
-        } catch (err) {
-            // Name may already exist under a different casing; try selecting it.
-            const fallback = findExactPlayerMatch(query) ||
-                allPlayers.find(p => p.name.trim().toLowerCase() === query.toLowerCase());
-            if (fallback) {
-                selected.add(fallback.id);
-                e.target.value = '';
-                searchQuery = '';
-                renderPlayerCheckboxes();
-                showToast(`Selected ${withDuprId(fallback.name, fallback)}`);
-            } else {
-                showToast(err.message);
-            }
-        }
+        // No match — open the create dialog
+        openCreatePlayerDialog();
+    });
+
+    document.getElementById('create-player-inline-btn').addEventListener('click', () => {
+        openCreatePlayerDialog();
     });
 
     document.getElementById('confirm-add-players').addEventListener('click', async () => {
