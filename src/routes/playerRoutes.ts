@@ -34,10 +34,20 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
   }
 });
 
-// GET /players - List my players
+// GET /players - List my players (owned by the current user)
 router.get('/', authenticate, (req: AuthenticatedRequest, res) => {
   try {
     const players = db.getPlayersByOwner(req.user!.id);
+    res.json(players);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /players/all - List all players across all users (for use in events)
+router.get('/all', authenticate, (req: AuthenticatedRequest, res) => {
+  try {
+    const players = db.getAllPlayers();
     res.json(players);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -104,11 +114,6 @@ router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async
       player = db.getPlayer(player_id);
       if (!player) {
         return res.status(404).json({ error: 'Player not found' });
-      }
-      const isOwner = req.user && player.ownerId === req.user.id;
-      const isModerator = req.shareAccess && req.shareAccess.permission === 'moderator';
-      if (!isOwner && !isModerator) {
-        return res.status(403).json({ error: 'Forbidden' });
       }
     } else if (name) {
       const userId = req.user?.id;

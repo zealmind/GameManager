@@ -10,16 +10,20 @@ async function withEventAccess(req, res, next) {
     const token = authHeader?.startsWith('Bearer ')
         ? authHeader.slice(7)
         : req.cookies?.token;
-    if (token) {
-        return (0, auth_1.authenticate)(req, res, next);
-    }
+    // Always resolve a share token if present, regardless of whether the user is logged in.
+    // This allows a logged-in user who also holds a share token to access events they don't own.
     const share = req.headers['x-share-token'];
     if (typeof share === 'string') {
         const access = Database_1.Database.getInstance().resolveShareToken(share);
         if (access) {
             req.shareAccess = access;
-            return next();
         }
+    }
+    if (token) {
+        return (0, auth_1.authenticate)(req, res, next);
+    }
+    if (req.shareAccess) {
+        return next();
     }
     return res.status(401).json({ error: 'Unauthorized' });
 }

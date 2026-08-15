@@ -48,7 +48,9 @@ class Database {
       CREATE TABLE IF NOT EXISTS players (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
-        owner_id TEXT
+        nick_name TEXT,
+        owner_id TEXT,
+        dupr_id TEXT
       );
       CREATE TABLE IF NOT EXISTS events (
         id TEXT PRIMARY KEY,
@@ -56,6 +58,7 @@ class Database {
         courts INTEGER NOT NULL,
         totalGamesToPlay INTEGER NOT NULL,
         startedAt TEXT,
+        endedAt TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS registrations (
@@ -65,11 +68,14 @@ class Database {
         status TEXT NOT NULL DEFAULT 'WAITING',
         targetGames INTEGER NOT NULL DEFAULT 6,
         partners TEXT NOT NULL DEFAULT '[]',
+        priority INTEGER NOT NULL DEFAULT 10,
+        nick_name TEXT,
         PRIMARY KEY (eventId, playerId)
       );
       CREATE TABLE IF NOT EXISTS games (
         id TEXT PRIMARY KEY,
         eventId TEXT NOT NULL,
+        gameNumber INTEGER NOT NULL DEFAULT 0,
         courtId INTEGER NOT NULL,
         players TEXT NOT NULL,
         scores TEXT,
@@ -77,113 +83,344 @@ class Database {
         completed INTEGER NOT NULL DEFAULT 0,
         started INTEGER NOT NULL DEFAULT 0,
         startedAt TEXT,
-        completedAt TEXT
+        completedAt TEXT,
+        in_history INTEGER NOT NULL DEFAULT 0
       );
-      CREATE TABLE IF NOT EXISTS app_state (
-        id INTEGER PRIMARY KEY,
-        data TEXT NOT NULL
+      CREATE TABLE IF NOT EXISTS shared_access (
+        token TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        permission TEXT NOT NULL,
+        invited_by TEXT NOT NULL,
+        created_at TEXT NOT NULL
       );
     `);
-        await this.migrateAddOwnerId();
+        await this.migrateAddDuprId();
+        await this.migrateAddRegistrationNickName();
         await this.load();
     }
-    async migrateAddOwnerId() {
+    /** Add dupr_id to existing players tables that predate the column. */
+    async migrateAddDuprId() {
         try {
-            await this.client.execute("ALTER TABLE events ADD COLUMN owner_id TEXT");
-        }
-        catch {
-            // column already exists
-        }
-        try {
-            await this.client.execute("ALTER TABLE players ADD COLUMN owner_id TEXT");
+            await this.client.execute('ALTER TABLE players ADD COLUMN dupr_id TEXT');
         }
         catch {
             // column already exists
         }
     }
-    async persist() {
-        const playersData = Array.from(this.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId }));
-        const eventsData = Array.from(this.events.values()).map(e => ({
-            id: e.id,
-            name: e.name,
-            courts: e.courts,
-            totalGamesToPlay: e.totalGamesToPlay,
-            startedAt: e.startedAt ? e.startedAt.toISOString() : undefined,
-            endedAt: e.endedAt ? e.endedAt.toISOString() : undefined,
-            ownerId: e.ownerId || '',
-            players: Array.from(e.players.values()).map(p => ({ id: p.id, name: p.name, nickName: p.nickName, ownerId: p.ownerId })),
-            registrations: Array.from(e.registrations.values()),
-            games: e.games.map(g => ({
-                ...g,
-                createdAt: g.createdAt.toISOString(),
-                startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
-                completedAt: g.completedAt?.toISOString()
-            })),
-            gameHistory: e.gameHistory.map(g => ({
-                ...g,
-                createdAt: g.createdAt.toISOString(),
-                startedAt: g.startedAt ? g.startedAt.toISOString() : undefined,
-                completedAt: g.completedAt?.toISOString()
-            })),
-            sharedAccess: e.sharedAccess || []
-        }));
-        const registrationsData = Array.from(this.eventRegistrations.values());
-        const data = { players: playersData, events: eventsData, eventRegistrations: registrationsData };
-        const json = JSON.stringify(data, null, 2);
-        await this.client.execute('INSERT OR REPLACE INTO app_state (id, data) VALUES (?, ?)', [1, json]);
+    /** Add nick_name to existing registrations tables (per-event, not on shared players). */
+    async migrateAddRegistrationNickName() {
+        try {
+            await this.client.execute('ALTER TABLE registrations ADD COLUMN nick_name TEXT');
+        }
+        catch {
+            // column already exists
+        }
+    }
+    syncRegistrationIndex(event) {
+        if (event) {
+            for (const key of Array.from(this.eventRegistrations.keys())) {
+                if (key.startsWith(`${event.id}_`))
+                    this.eventRegistrations.delete(key);
+            }
+            for (const reg of event.registrations.values()) {
+                this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+            }
+            return;
+        }
+        this.eventRegistrations.clear();
+        for (const e of this.events.values()) {
+            for (const reg of e.registrations.values()) {
+                this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+            }
+        }
+    }
+    async batch(stmts) {
+        if (stmts.length === 0)
+            return;
+        if (typeof this.client.batch === 'function') {
+            await this.client.batch(stmts.map(s => ({ sql: s.sql, args: s.args ?? [] })), 'write');
+        }
+        else {
+            for (const s of stmts) {
+                await this.client.execute(s.sql, s.args ?? []);
+            }
+        }
+    }
+    playerUpsertStmt(player) {
+        return {
+            sql: `INSERT INTO players (id, name, nick_name, owner_id, dupr_id) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              nick_name = NULL,
+              owner_id = excluded.owner_id,
+              dupr_id = excluded.dupr_id`,
+            args: [
+                player.id,
+                player.name,
+                null,
+                player.ownerId ?? null,
+                player.duprId ?? null,
+            ],
+        };
+    }
+    registrationUpsertStmt(r) {
+        return {
+            sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(eventId, playerId) DO UPDATE SET
+              gamesPlayedCount = excluded.gamesPlayedCount,
+              status = excluded.status,
+              targetGames = excluded.targetGames,
+              partners = excluded.partners,
+              priority = excluded.priority,
+              nick_name = excluded.nick_name`,
+            args: [
+                r.eventId,
+                r.playerId,
+                r.gamesPlayedCount,
+                r.status,
+                r.targetGames,
+                JSON.stringify(r.partners || []),
+                r.priority ?? 10,
+                r.nickName ?? null,
+            ],
+        };
+    }
+    gameUpsertStmt(g, inHistory) {
+        return {
+            sql: `INSERT INTO games (
+              id, eventId, gameNumber, courtId, players, scores, createdAt,
+              completed, started, startedAt, completedAt, in_history
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              eventId = excluded.eventId,
+              gameNumber = excluded.gameNumber,
+              courtId = excluded.courtId,
+              players = excluded.players,
+              scores = excluded.scores,
+              createdAt = excluded.createdAt,
+              completed = excluded.completed,
+              started = excluded.started,
+              startedAt = excluded.startedAt,
+              completedAt = excluded.completedAt,
+              in_history = excluded.in_history`,
+            args: [
+                g.id,
+                g.eventId,
+                g.gameNumber ?? 0,
+                g.courtId,
+                JSON.stringify({
+                    ...g.players,
+                    ...(g.allotmentWarning ? { allotmentWarning: g.allotmentWarning } : {}),
+                }),
+                g.scores != null ? JSON.stringify(g.scores) : null,
+                g.createdAt instanceof Date ? g.createdAt.toISOString() : g.createdAt,
+                g.completed ? 1 : 0,
+                g.started ? 1 : 0,
+                g.startedAt ? (g.startedAt instanceof Date ? g.startedAt.toISOString() : g.startedAt) : null,
+                g.completedAt ? (g.completedAt instanceof Date ? g.completedAt.toISOString() : g.completedAt) : null,
+                inHistory ? 1 : 0,
+            ],
+        };
+    }
+    /** Persist a single player row. */
+    async savePlayer(player) {
+        const stmt = this.playerUpsertStmt(player);
+        await this.client.execute(stmt.sql, stmt.args);
+    }
+    /**
+     * Persist one event and its related rows only (registrations, games, shares),
+     * plus any players attached to the event.
+     * Other events are left untouched for better concurrency.
+     */
+    async persistEvent(eventId) {
+        const event = this.events.get(eventId);
+        if (!event)
+            throw new Error('Event not found');
+        this.syncRegistrationIndex(event);
+        const stmts = [];
+        for (const player of event.players.values()) {
+            stmts.push(this.playerUpsertStmt(player));
+        }
+        stmts.push({
+            sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              courts = excluded.courts,
+              totalGamesToPlay = excluded.totalGamesToPlay,
+              startedAt = excluded.startedAt,
+              endedAt = excluded.endedAt,
+              owner_id = excluded.owner_id`,
+            args: [
+                event.id,
+                event.name,
+                event.courts,
+                event.totalGamesToPlay,
+                event.startedAt ? event.startedAt.toISOString() : null,
+                event.endedAt ? event.endedAt.toISOString() : null,
+                event.ownerId || null,
+            ],
+        });
+        const regPlayerIds = Array.from(event.registrations.keys());
+        if (regPlayerIds.length === 0) {
+            stmts.push({ sql: 'DELETE FROM registrations WHERE eventId = ?', args: [event.id] });
+        }
+        else {
+            stmts.push({
+                sql: `DELETE FROM registrations WHERE eventId = ? AND playerId NOT IN (${regPlayerIds.map(() => '?').join(',')})`,
+                args: [event.id, ...regPlayerIds],
+            });
+        }
+        for (const reg of event.registrations.values()) {
+            stmts.push(this.registrationUpsertStmt(reg));
+        }
+        const gamesById = new Map();
+        for (const g of event.games) {
+            gamesById.set(g.id, { game: g, inHistory: !!g.completed });
+        }
+        for (const g of event.gameHistory) {
+            gamesById.set(g.id, { game: g, inHistory: true });
+        }
+        const gameIds = Array.from(gamesById.keys());
+        if (gameIds.length === 0) {
+            stmts.push({ sql: 'DELETE FROM games WHERE eventId = ?', args: [event.id] });
+        }
+        else {
+            stmts.push({
+                sql: `DELETE FROM games WHERE eventId = ? AND id NOT IN (${gameIds.map(() => '?').join(',')})`,
+                args: [event.id, ...gameIds],
+            });
+        }
+        for (const { game, inHistory } of gamesById.values()) {
+            stmts.push(this.gameUpsertStmt(game, inHistory));
+        }
+        const tokens = (event.sharedAccess || []).map(a => a.token);
+        if (tokens.length === 0) {
+            stmts.push({ sql: 'DELETE FROM shared_access WHERE event_id = ?', args: [event.id] });
+        }
+        else {
+            stmts.push({
+                sql: `DELETE FROM shared_access WHERE event_id = ? AND token NOT IN (${tokens.map(() => '?').join(',')})`,
+                args: [event.id, ...tokens],
+            });
+        }
+        for (const a of event.sharedAccess || []) {
+            stmts.push({
+                sql: `INSERT INTO shared_access (token, event_id, permission, invited_by, created_at)
+              VALUES (?, ?, ?, ?, ?)
+              ON CONFLICT(token) DO UPDATE SET
+                event_id = excluded.event_id,
+                permission = excluded.permission,
+                invited_by = excluded.invited_by,
+                created_at = excluded.created_at`,
+                args: [a.token, event.id, a.permission, a.invitedBy, a.createdAt],
+            });
+        }
+        await this.batch(stmts);
     }
     async load() {
         try {
-            const result = await this.client.execute('SELECT data FROM app_state WHERE id = ?', [1]);
-            if (result.rows.length === 0)
-                return;
-            const raw = result.rows[0].data;
-            const data = JSON.parse(raw);
-            if (!data)
-                return;
-            for (const p of data.players) {
-                const player = new Player_1.Player(p.name, p.id);
-                player.nickName = p.nickName;
-                player.ownerId = p.ownerId;
-                this.players.set(p.id, player);
+            this.players.clear();
+            this.events.clear();
+            this.eventRegistrations.clear();
+            const playerRows = await this.client.execute('SELECT id, name, nick_name, owner_id, dupr_id FROM players');
+            for (const row of playerRows.rows) {
+                const player = new Player_1.Player(row.name, row.id);
+                player.ownerId = row.owner_id ?? undefined;
+                if (row.dupr_id)
+                    player.duprId = row.dupr_id;
+                this.players.set(player.id, player);
             }
-            for (const e of data.events) {
-                const event = new Event_1.Event(e.name, e.totalGamesToPlay, e.courts);
-                event.id = e.id;
-                event.startedAt = e.startedAt ? new Date(e.startedAt) : undefined;
-                event.endedAt = e.endedAt ? new Date(e.endedAt) : undefined;
-                event.ownerId = e.ownerId;
-                event.sharedAccess = e.sharedAccess || [];
-                for (const p of e.players) {
-                    const player = this.players.get(p.id) || new Player_1.Player(p.name, p.id);
-                    player.nickName = p.nickName;
-                    if (!this.players.has(player.id)) {
-                        player.ownerId = p.ownerId;
-                        this.players.set(player.id, player);
-                    }
-                    event.players.set(player.id, player);
-                }
-                for (const r of (e.registrations || [])) {
+            const eventRows = await this.client.execute('SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id FROM events');
+            const regRows = await this.client.execute('SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name FROM registrations');
+            const gameRows = await this.client.execute(`SELECT id, eventId, gameNumber, courtId, players, scores, createdAt,
+                completed, started, startedAt, completedAt, in_history FROM games`);
+            const shareRows = await this.client.execute('SELECT token, event_id, permission, invited_by, created_at FROM shared_access');
+            const regsByEvent = new Map();
+            for (const row of regRows.rows) {
+                const partners = typeof row.partners === 'string' ? JSON.parse(row.partners) : (row.partners || []);
+                const reg = {
+                    eventId: row.eventId,
+                    playerId: row.playerId,
+                    gamesPlayedCount: Number(row.gamesPlayedCount) || 0,
+                    status: row.status,
+                    targetGames: Number(row.targetGames) || 0,
+                    partners,
+                    priority: row.priority != null ? Number(row.priority) : 10,
+                    nickName: row.nick_name || undefined,
+                };
+                const list = regsByEvent.get(reg.eventId) || [];
+                list.push(reg);
+                regsByEvent.set(reg.eventId, list);
+                this.eventRegistrations.set(`${reg.eventId}_${reg.playerId}`, reg);
+            }
+            const gamesByEvent = new Map();
+            for (const row of gameRows.rows) {
+                const playersRaw = typeof row.players === 'string' ? JSON.parse(row.players) : row.players;
+                const allotmentWarning = typeof playersRaw?.allotmentWarning === 'string' ? playersRaw.allotmentWarning : undefined;
+                const players = {
+                    team1: playersRaw?.team1 || [],
+                    team2: playersRaw?.team2 || [],
+                };
+                const scores = row.scores == null
+                    ? undefined
+                    : (typeof row.scores === 'string' ? JSON.parse(row.scores) : row.scores);
+                const game = {
+                    id: row.id,
+                    eventId: row.eventId,
+                    gameNumber: Number(row.gameNumber) || 0,
+                    courtId: Number(row.courtId),
+                    players,
+                    scores,
+                    createdAt: new Date(row.createdAt),
+                    completed: Boolean(row.completed),
+                    started: Boolean(row.started),
+                    startedAt: row.startedAt ? new Date(row.startedAt) : undefined,
+                    completedAt: row.completedAt ? new Date(row.completedAt) : undefined,
+                    ...(allotmentWarning ? { allotmentWarning } : {}),
+                };
+                const bucket = gamesByEvent.get(game.eventId) || { active: [], history: [] };
+                if (row.in_history)
+                    bucket.history.push(game);
+                else
+                    bucket.active.push(game);
+                gamesByEvent.set(game.eventId, bucket);
+            }
+            const sharesByEvent = new Map();
+            for (const row of shareRows.rows) {
+                const access = {
+                    token: row.token,
+                    permission: row.permission,
+                    invitedBy: row.invited_by,
+                    createdAt: row.created_at,
+                };
+                const list = sharesByEvent.get(row.event_id) || [];
+                list.push(access);
+                sharesByEvent.set(row.event_id, list);
+            }
+            for (const row of eventRows.rows) {
+                const event = new Event_1.Event(row.name, Number(row.totalGamesToPlay), Number(row.courts));
+                event.id = row.id;
+                event.startedAt = row.startedAt ? new Date(row.startedAt) : undefined;
+                event.endedAt = row.endedAt ? new Date(row.endedAt) : undefined;
+                event.ownerId = row.owner_id || '';
+                event.sharedAccess = sharesByEvent.get(event.id) || [];
+                const regs = regsByEvent.get(event.id) || [];
+                for (const r of regs) {
                     event.registrations.set(r.playerId, r);
+                    const player = this.players.get(r.playerId);
+                    if (player)
+                        event.players.set(player.id, player);
                 }
-                event.games = e.games.map(g => ({
-                    ...g,
-                    createdAt: new Date(g.createdAt),
-                    startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
-                    completedAt: g.completedAt ? new Date(g.completedAt) : undefined
-                }));
-                event.gameHistory = e.gameHistory.map(g => ({
-                    ...g,
-                    createdAt: new Date(g.createdAt),
-                    startedAt: g.startedAt ? new Date(g.startedAt) : undefined,
-                    completedAt: g.completedAt ? new Date(g.completedAt) : undefined
-                }));
-                const allGameNumbers = [...event.games, ...event.gameHistory].map(g => g.gameNumber).filter((n) => typeof n === 'number');
+                const games = gamesByEvent.get(event.id) || { active: [], history: [] };
+                event.games = games.active;
+                event.gameHistory = games.history;
+                const allGameNumbers = [...event.games, ...event.gameHistory]
+                    .map(g => g.gameNumber)
+                    .filter((n) => typeof n === 'number');
                 event.nextGameNumber = allGameNumbers.length > 0 ? Math.max(...allGameNumbers) + 1 : 1;
                 this.events.set(event.id, event);
-            }
-            for (const r of data.eventRegistrations) {
-                this.eventRegistrations.set(`${r.eventId}_${r.playerId}`, r);
             }
         }
         catch (err) {
@@ -228,23 +465,69 @@ class Database {
         return Array.from(this.players.values());
     }
     getPlayersByOwner(ownerId) {
-        return Array.from(this.players.values()).filter((p) => p.ownerId === ownerId);
+        return Array.from(this.players.values()).filter(p => p.ownerId === ownerId);
     }
-    async createPlayer(name, ownerId) {
-        const existing = this.players.values();
-        for (const p of existing) {
-            if (p.name === name && p.ownerId === ownerId) {
-                throw new Error(`Player "${name}" already exists`);
+    assertUniquePlayerIdentity(ownerId, name, duprId, excludePlayerId) {
+        const nameKey = name.trim().toLowerCase();
+        const duprKey = duprId ? duprId.trim().toLowerCase() : '';
+        for (const p of this.players.values()) {
+            if (p.ownerId !== ownerId)
+                continue;
+            if (excludePlayerId && p.id === excludePlayerId)
+                continue;
+            if (p.name.trim().toLowerCase() === nameKey) {
+                throw new Error(`Player "${name.trim()}" already exists`);
+            }
+            if (duprKey && p.duprId && p.duprId.trim().toLowerCase() === duprKey) {
+                throw new Error(`DUPR ID "${duprId.trim()}" already exists`);
             }
         }
-        const player = new Player_1.Player(name);
+    }
+    async createPlayer(name, ownerId, duprId) {
+        const trimmedName = name.trim();
+        if (!trimmedName)
+            throw new Error('Player name cannot be empty');
+        const trimmedDuprId = duprId?.trim() || undefined;
+        this.assertUniquePlayerIdentity(ownerId, trimmedName, trimmedDuprId);
+        const player = new Player_1.Player(trimmedName);
         player.ownerId = ownerId;
+        if (trimmedDuprId)
+            player.duprId = trimmedDuprId;
         this.players.set(player.id, player);
-        await this.persist();
+        await this.savePlayer(player);
+        return player;
+    }
+    async updatePlayer(playerId, updates) {
+        const player = this.players.get(playerId);
+        if (!player)
+            return undefined;
+        const nextName = updates.name !== undefined ? updates.name.trim() : player.name;
+        if (!nextName)
+            throw new Error('Player name cannot be empty');
+        let nextDuprId = player.duprId;
+        if (updates.duprId !== undefined) {
+            const trimmed = updates.duprId == null ? '' : String(updates.duprId).trim();
+            nextDuprId = trimmed || undefined;
+        }
+        this.assertUniquePlayerIdentity(player.ownerId || '', nextName, nextDuprId, playerId);
+        player.name = nextName;
+        player.duprId = nextDuprId;
+        await this.savePlayer(player);
         return player;
     }
     findPlayerByName(name) {
-        return Array.from(this.players.values()).find(p => p.name === name);
+        const key = name.trim().toLowerCase();
+        return Array.from(this.players.values()).find(p => p.name.trim().toLowerCase() === key);
+    }
+    findPlayerByDuprId(duprId, ownerId) {
+        const key = duprId.trim().toLowerCase();
+        if (!key)
+            return undefined;
+        return Array.from(this.players.values()).find(p => {
+            if (ownerId && p.ownerId !== ownerId)
+                return false;
+            return !!p.duprId && p.duprId.trim().toLowerCase() === key;
+        });
     }
     // Event operations
     getEvent(eventId) {
@@ -261,25 +544,39 @@ class Database {
         event.ownerId = ownerId;
         event.sharedAccess = [];
         this.events.set(event.id, event);
-        await this.persist();
+        await this.client.execute('INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)', [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId]);
+        return event;
+    }
+    /**
+     * Create an unstarted copy of an event that imports only registered players
+     * (no games, history, start/end state, or share links).
+     */
+    async copyEvent(sourceEventId, name, ownerId) {
+        const source = this.events.get(sourceEventId);
+        if (!source)
+            throw new Error('Event not found');
+        const event = await this.createEvent(name, source.totalGamesToPlay, source.courts, ownerId);
+        for (const player of source.players.values()) {
+            const canonical = this.players.get(player.id) || player;
+            event.addPlayer(canonical);
+        }
+        await this.persistEvent(event.id);
         return event;
     }
     pruneShareTokens(event, permission, keep) {
         const others = event.sharedAccess.filter(a => a.permission !== permission);
         event.sharedAccess = keep ? [...others, keep] : others;
     }
-    /** Return the existing token for this permission, or create one. Keeps only one token per permission. */
     async getOrCreateShareToken(eventId, permission, invitedBy) {
         const event = this.events.get(eventId);
         if (!event)
             throw new Error('Event not found');
         const existing = event.sharedAccess.filter(a => a.permission === permission);
         if (existing.length > 0) {
-            // Prefer the most recently created; drop duplicates of the same permission
             const keep = [...existing].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
             if (existing.length > 1) {
                 this.pruneShareTokens(event, permission, keep);
-                await this.persist();
+                await this.persistEvent(eventId);
             }
             return { token: keep.token, created: false };
         }
@@ -290,10 +587,9 @@ class Database {
             createdAt: new Date().toISOString(),
         };
         this.pruneShareTokens(event, permission, access);
-        await this.persist();
+        await this.persistEvent(eventId);
         return { token: access.token, created: true };
     }
-    /** Revoke the current token for this permission and issue a new one. */
     async refreshShareToken(eventId, permission, invitedBy) {
         const event = this.events.get(eventId);
         if (!event)
@@ -305,7 +601,7 @@ class Database {
             createdAt: new Date().toISOString(),
         };
         this.pruneShareTokens(event, permission, access);
-        await this.persist();
+        await this.persistEvent(eventId);
         return { token: access.token };
     }
     async generateShareToken(eventId, permission, invitedBy) {
@@ -324,10 +620,9 @@ class Database {
     getEventsForUser(userId) {
         return Array.from(this.events.values()).filter((e) => e.ownerId === userId);
     }
-    getModeratedEvents(userId) {
-        return Array.from(this.events.values()).filter((e) => e.ownerId !== userId && e.sharedAccess && e.sharedAccess.length > 0);
+    getModeratedEvents(_userId) {
+        return [];
     }
-    // Event Player Registration operations
     getEventRegistration(eventId, playerId) {
         return this.eventRegistrations.get(`${eventId}_${playerId}`);
     }
@@ -346,7 +641,18 @@ class Database {
             priority: 10,
         };
         this.eventRegistrations.set(key, registration);
-        await this.persist();
+        const event = this.events.get(eventId);
+        if (event) {
+            event.registrations.set(playerId, registration);
+            const player = this.players.get(playerId);
+            if (player)
+                event.players.set(player.id, player);
+            await this.persistEvent(eventId);
+        }
+        else {
+            const stmt = this.registrationUpsertStmt(registration);
+            await this.client.execute(stmt.sql, stmt.args);
+        }
         return registration;
     }
     async updateEventRegistration(eventId, playerId, updates) {
@@ -356,40 +662,73 @@ class Database {
             return undefined;
         const updated = { ...existing, ...updates };
         this.eventRegistrations.set(key, updated);
-        await this.persist();
+        const event = this.events.get(eventId);
+        if (event) {
+            event.registrations.set(playerId, updated);
+            await this.persistEvent(eventId);
+        }
+        else {
+            const stmt = this.registrationUpsertStmt(updated);
+            await this.client.execute(stmt.sql, stmt.args);
+        }
         return updated;
     }
-    // Game operations
     getCompletedGames(eventId) {
         const event = this.events.get(eventId);
         return event?.gameHistory || [];
     }
     async deletePlayer(playerId) {
-        this.players.delete(playerId);
+        const affectedEventIds = [];
         for (const event of this.events.values()) {
-            event.removePlayer(playerId);
-        }
-        for (const key of Array.from(this.eventRegistrations.keys())) {
-            if (key.endsWith(`_${playerId}`)) {
-                this.eventRegistrations.delete(key);
+            if (event.players.has(playerId) || event.registrations.has(playerId)) {
+                affectedEventIds.push(event.id);
+                try {
+                    event.removePlayer(playerId);
+                }
+                catch {
+                    // If playing, still force-remove from maps for delete
+                    event.players.delete(playerId);
+                    event.registrations.delete(playerId);
+                }
             }
         }
-        await this.persist();
+        this.players.delete(playerId);
+        for (const key of Array.from(this.eventRegistrations.keys())) {
+            if (key.endsWith(`_${playerId}`))
+                this.eventRegistrations.delete(key);
+        }
+        await this.batch([
+            { sql: 'DELETE FROM registrations WHERE playerId = ?', args: [playerId] },
+            { sql: 'DELETE FROM players WHERE id = ?', args: [playerId] },
+        ]);
+        for (const eventId of affectedEventIds) {
+            await this.persistEvent(eventId);
+        }
     }
     async deleteEvent(eventId) {
         this.events.delete(eventId);
         for (const key of Array.from(this.eventRegistrations.keys())) {
-            if (key.startsWith(`${eventId}_`)) {
+            if (key.startsWith(`${eventId}_`))
                 this.eventRegistrations.delete(key);
-            }
         }
-        await this.persist();
+        await this.batch([
+            { sql: 'DELETE FROM shared_access WHERE event_id = ?', args: [eventId] },
+            { sql: 'DELETE FROM games WHERE eventId = ?', args: [eventId] },
+            { sql: 'DELETE FROM registrations WHERE eventId = ?', args: [eventId] },
+            { sql: 'DELETE FROM events WHERE id = ?', args: [eventId] },
+        ]);
     }
     async clear() {
         this.players.clear();
         this.events.clear();
         this.eventRegistrations.clear();
-        await this.client.execute('DELETE FROM app_state WHERE id = ?', [1]);
+        await this.batch([
+            { sql: 'DELETE FROM shared_access' },
+            { sql: 'DELETE FROM games' },
+            { sql: 'DELETE FROM registrations' },
+            { sql: 'DELETE FROM players' },
+            { sql: 'DELETE FROM events' },
+        ]);
     }
 }
 exports.Database = Database;

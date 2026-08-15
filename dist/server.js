@@ -36,9 +36,15 @@ app.use(express_1.default.static(node_path_1.default.join(process.cwd(), 'public
 app.use('/auth', authRoutes_1.default);
 // API info endpoint
 app.get('/api', (req, res) => {
+    let version = 'unknown';
+    try {
+        const versionData = JSON.parse(require('fs').readFileSync(node_path_1.default.join(process.cwd(), 'public', 'version.json'), 'utf8'));
+        version = `${versionData.major}.${versionData.minor}.${versionData.patch}`;
+    }
+    catch { }
     res.json({
         message: 'GameManager API is running',
-        version: '1.0.0',
+        version,
         endpoints: {
             auth: {
                 register: 'POST /auth/register',
@@ -51,11 +57,14 @@ app.get('/api', (req, res) => {
                 create: 'POST /events',
                 list: 'GET /events',
                 get: 'GET /events/:eventId',
+                rename: 'PATCH /events/:eventId',
+                copy: 'POST /events/:eventId/copy',
                 status: 'GET /events/:eventId/status'
             },
             players: {
                 create: 'POST /players',
                 get: 'GET /players/:playerId',
+                update: 'PATCH /players/:playerId',
                 register: 'POST /events/:eventId/players',
                 updateStatus: 'PATCH /events/:eventId/players/:playerId'
             },
@@ -71,8 +80,11 @@ app.use('/events', eventRoutes_1.default);
 app.use('/players', playerRoutes_1.default);
 app.use('/events', playerRoutes_1.default);
 app.use('/events', gameRoutes_1.default);
-// Serve app shell for SPA routes
+// Serve app shell for SPA routes (skip if it looks like an asset request)
 app.get('*', (req, res) => {
+    if (req.path.includes('.')) {
+        return res.status(404).send('Not found');
+    }
     res.sendFile(node_path_1.default.join(process.cwd(), 'public', 'index.html'));
 });
 exports.default = app;

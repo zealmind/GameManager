@@ -23,7 +23,8 @@ export declare class Event {
     isStarted(): boolean;
     isEnded(): boolean;
     start(): void;
-    assignNickNames(): void;
+    /** Assign unique per-event nicknames on registrations. Returns true if any changed. */
+    assignNickNames(): boolean;
     addPlayer(player: Player): void;
     removePlayer(playerId: string): void;
     getPlayer(playerId: string): Player | undefined;

@@ -14,8 +14,13 @@ class SchedulingService {
             return 0;
         if (reg.gamesPlayedCount === 0)
             return 10;
-        if (reg.gamesPlayedCount >= reg.targetGames)
+        if (reg.gamesPlayedCount >= reg.targetGames) {
+            // Fulfilled players who explicitly returned to WAITING may play one more game;
+            // targetGames / fulfilled state stay unchanged, and endGame sends them AWAY again.
+            if (reg.status === 'WAITING')
+                return Math.max(reg.priority, 5);
             return 0;
+        }
         return reg.priority;
     }
     getAvailablePlayers(event) {
@@ -43,6 +48,237 @@ class SchedulingService {
     hasPlayedTogether(player1Id, player2Id, event) {
         const reg1 = event.getRegistration(player1Id);
         return reg1 ? reg1.partners.includes(player2Id) : false;
+    }
+    /** Undirected pair key for co-play counts */
+    pairKey(a, b) {
+        return a < b ? `${a}|${b}` : `${b}|${a}`;
+    }
+    /**
+     * Counts how often each pair has shared a court (teammates or opponents),
+     * matching the "Who Played with Who" matrix.
+     */
+    buildCoPlayCounts(event) {
+        const counts = new Map();
+        for (const game of event.gameHistory) {
+            const ids = [...game.players.team1, ...game.players.team2];
+            for (let i = 0; i < ids.length; i++) {
+                for (let j = i + 1; j < ids.length; j++) {
+                    const key = this.pairKey(ids[i], ids[j]);
+                    counts.set(key, (counts.get(key) || 0) + 1);
+                }
+            }
+        }
+        return counts;
+    }
+    getCoPlay(counts, a, b) {
+        return counts.get(this.pairKey(a, b)) || 0;
+    }
+    combinations(arr, k) {
+        const result = [];
+        const n = arr.length;
+        if (k === 0)
+            return [[]];
+        if (k > n || k < 0)
+            return result;
+        const indices = Array.from({ length: k }, (_, i) => i);
+        while (true) {
+            result.push(indices.map(i => arr[i]));
+            let i = k - 1;
+            while (i >= 0 && indices[i] === i + n - k)
+                i--;
+            if (i < 0)
+                break;
+            indices[i]++;
+            for (let j = i + 1; j < k; j++)
+                indices[j] = indices[j - 1] + 1;
+        }
+        return result;
+    }
+    /**
+     * Score a concrete team assignment.
+     * Comparison order (lexicographic):
+     *   1. unique partners (minimize partner repeats)
+     *   2. matrix-aware co-play spread
+     *   3. priority / games-played fairness
+     * Soft-fail: still return the best option even when partner repeats are unavoidable.
+     */
+    scoreAssignment(team1, team2, event, coPlay) {
+        const ids = [...team1, ...team2];
+        let prioritySum = 0;
+        let gamesPlayedSum = 0;
+        for (const id of ids) {
+            prioritySum += this.getPlayerPriority(id, event);
+            gamesPlayedSum += event.getRegistration(id)?.gamesPlayedCount ?? 0;
+        }
+        let partnerRepeats = 0;
+        if (team1.length === 2 && this.hasPlayedTogether(team1[0], team1[1], event))
+            partnerRepeats++;
+        if (team2.length === 2 && this.hasPlayedTogether(team2[0], team2[1], event))
+            partnerRepeats++;
+        const team1Set = new Set(team1);
+        let coPlayCost = 0;
+        let maxCoPlay = 0;
+        let zeroPairs = 0;
+        for (let i = 0; i < ids.length; i++) {
+            for (let j = i + 1; j < ids.length; j++) {
+                const c = this.getCoPlay(coPlay, ids[i], ids[j]);
+                maxCoPlay = Math.max(maxCoPlay, c);
+                if (c === 0)
+                    zeroPairs++;
+                const sameTeam = (team1Set.has(ids[i]) && team1Set.has(ids[j])) ||
+                    (!team1Set.has(ids[i]) && !team1Set.has(ids[j]));
+                // Teammate co-play hurts more than opponent co-play
+                const weight = sameTeam ? 25 : 10;
+                coPlayCost += weight * c * c;
+            }
+        }
+        const matrixCost = coPlayCost + maxCoPlay * 30 - zeroPairs * 20;
+        return {
+            team1,
+            team2,
+            partnerRepeats,
+            matrixCost,
+            maxCoPlay,
+            zeroPairs,
+            prioritySum,
+            gamesPlayedSum,
+        };
+    }
+    /** Negative => a is better than b, per the rank order above */
+    compareAssignments(a, b) {
+        if (a.partnerRepeats !== b.partnerRepeats)
+            return a.partnerRepeats - b.partnerRepeats;
+        if (a.matrixCost !== b.matrixCost)
+            return a.matrixCost - b.matrixCost;
+        if (a.prioritySum !== b.prioritySum)
+            return b.prioritySum - a.prioritySum;
+        if (a.gamesPlayedSum !== b.gamesPlayedSum)
+            return a.gamesPlayedSum - b.gamesPlayedSum;
+        return 0;
+    }
+    /** Three unique ways to split four players into two pairs */
+    teamPartitions(ids) {
+        const [a, b, c, d] = ids;
+        return [
+            { team1: [a, b], team2: [c, d] },
+            { team1: [a, c], team2: [b, d] },
+            { team1: [a, d], team2: [b, c] },
+        ];
+    }
+    buildWarning(best) {
+        const parts = [];
+        if (best.partnerRepeats > 0) {
+            parts.push('repeat partners (no unused partnerships available)');
+        }
+        // This game increments every pair in the foursome by 1.
+        // Warn when any pair is already at 2+ so the result would be 3+.
+        if (best.maxCoPlay >= 2) {
+            parts.push(`some players will share a court ${best.maxCoPlay + 1}+ times — cancel and wait if more players become available`);
+        }
+        if (parts.length === 0)
+            return undefined;
+        return `Best available grouping used — ${parts.join('; ')}`;
+    }
+    /**
+     * Find the best 2v2 among waiting players. Always returns a grouping when
+     * at least 4 players are available (soft-allows partner repeats).
+     */
+    findBest2v2(available, event, lockedTeam1 = [], lockedTeam2 = []) {
+        if (available.length + lockedTeam1.length + lockedTeam2.length < 4)
+            return null;
+        const coPlay = this.buildCoPlayCounts(event);
+        const lockedCount = lockedTeam1.length + lockedTeam2.length;
+        const need = 4 - lockedCount;
+        if (need < 0)
+            return null;
+        if (need === 0) {
+            return this.scoreAssignment(lockedTeam1, lockedTeam2, event, coPlay);
+        }
+        // Cap enumeration size; pool is already priority-sorted
+        const pool = available.slice(0, Math.min(available.length, 14));
+        if (pool.length < need)
+            return null;
+        let best = null;
+        const fillCombos = this.combinations(pool, need);
+        for (const fill of fillCombos) {
+            const fillIds = fill.map(p => p.id);
+            const candidates = this.enumerateCompletions(lockedTeam1, lockedTeam2, fillIds);
+            for (const { team1, team2 } of candidates) {
+                if (team1.length + team2.length !== 4)
+                    continue;
+                if (team1.length === 0 || team2.length === 0)
+                    continue;
+                // Prefer true 2v2 when possible
+                if (team1.length !== 2 || team2.length !== 2)
+                    continue;
+                const scored = this.scoreAssignment(team1, team2, event, coPlay);
+                if (!best || this.compareAssignments(scored, best) < 0)
+                    best = scored;
+            }
+        }
+        return best;
+    }
+    /**
+     * Place unlocked player IDs into empty team slots / complete both teams as 2v2.
+     */
+    enumerateCompletions(lockedTeam1, lockedTeam2, fillIds) {
+        const t1Need = Math.max(0, 2 - lockedTeam1.length);
+        const t2Need = Math.max(0, 2 - lockedTeam2.length);
+        const results = [];
+        if (lockedTeam1.length === 0 && lockedTeam2.length === 0 && fillIds.length === 4) {
+            return this.teamPartitions(fillIds);
+        }
+        // Choose which fill players go to team1 vs team2
+        const t1Combos = this.combinations(fillIds, t1Need);
+        for (const t1Extra of t1Combos) {
+            const t1Set = new Set(t1Extra);
+            const t2Extra = fillIds.filter(id => !t1Set.has(id));
+            if (t2Extra.length !== t2Need)
+                continue;
+            results.push({
+                team1: [...lockedTeam1, ...t1Extra],
+                team2: [...lockedTeam2, ...t2Extra],
+            });
+        }
+        return results;
+    }
+    findBest1v2(available, event) {
+        if (available.length < 3)
+            return null;
+        const coPlay = this.buildCoPlayCounts(event);
+        const pool = available.slice(0, Math.min(available.length, 10));
+        let best = null;
+        for (let i = 0; i < pool.length; i++) {
+            for (let j = 0; j < pool.length; j++) {
+                if (j === i)
+                    continue;
+                for (let k = j + 1; k < pool.length; k++) {
+                    if (k === i)
+                        continue;
+                    const solo = pool[i].id;
+                    const pair = [pool[j].id, pool[k].id];
+                    const scored = this.scoreAssignment([solo], pair, event, coPlay);
+                    if (!best || this.compareAssignments(scored, best) < 0)
+                        best = scored;
+                }
+            }
+        }
+        return best;
+    }
+    commitAssignment(event, eventId, courtId, assignment) {
+        const game = (0, Game_1.createGame)(eventId, courtId, assignment.team1, assignment.team2);
+        const warning = this.buildWarning(assignment);
+        if (warning)
+            game.allotmentWarning = warning;
+        for (const pid of [...assignment.team1, ...assignment.team2]) {
+            event.updateRegistration(pid, { status: 'PLAYING' });
+        }
+        event.games.push(game);
+        return {
+            success: true,
+            game,
+            warning,
+        };
     }
     assignNextGame(eventId, courtId) {
         const event = this.db.getEvent(eventId);
@@ -78,55 +314,17 @@ class SchedulingService {
         if (available.length < 3) {
             return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Insufficient available players'], shouldWait: true };
         }
-        const maxAttempts = Math.min(available.length, 30);
-        // Try 2v2 first when 4+ players are available
+        // Prefer best-balanced 2v2 (soft partner constraint) when 4+ waiting
         if (available.length >= 4) {
-            for (let i = 0; i < maxAttempts; i++) {
-                const topPlayer = available[i];
-                const remaining = available.filter(p => p.id !== topPlayer.id);
-                const partner = remaining.find(p => !this.hasPlayedTogether(topPlayer.id, p.id, event));
-                if (!partner)
-                    continue;
-                const team1 = [topPlayer, partner];
-                const team1Ids = new Set([topPlayer.id, partner.id]);
-                const opponentsCandidates = remaining.filter(p => !team1Ids.has(p.id));
-                let team2 = [];
-                outer: for (let j = 0; j < opponentsCandidates.length - 1; j++) {
-                    for (let k = j + 1; k < opponentsCandidates.length; k++) {
-                        if (!this.hasPlayedTogether(opponentsCandidates[j].id, opponentsCandidates[k].id, event)) {
-                            team2 = [opponentsCandidates[j], opponentsCandidates[k]];
-                            break outer;
-                        }
-                    }
-                }
-                if (team2.length < 2)
-                    continue;
-                const playerIds = [team1[0].id, team1[1].id, team2[0].id, team2[1].id];
-                const game = (0, Game_1.createGame)(eventId, courtId, [team1[0].id, team1[1].id], [team2[0].id, team2[1].id]);
-                const allPlayers = [...team1, ...team2];
-                for (const p of allPlayers) {
-                    event.updateRegistration(p.id, { status: 'PLAYING' });
-                }
-                event.games.push(game);
-                return { success: true, game };
+            const best = this.findBest2v2(available, event);
+            if (best) {
+                return this.commitAssignment(event, eventId, courtId, best);
             }
         }
-        // Fallback: form 1v2 games when 3+ players are available but 2v2 pairing failed
-        for (let i = 0; i < maxAttempts; i++) {
-            const topPlayer = available[i];
-            const remaining = available.filter(p => p.id !== topPlayer.id);
-            if (remaining.length >= 2) {
-                const team1 = [topPlayer];
-                const team2 = [remaining[0], remaining[1]];
-                if (!this.hasPlayedTogether(remaining[0].id, remaining[1].id, event)) {
-                    const game = (0, Game_1.createGame)(eventId, courtId, [topPlayer.id], [remaining[0].id, remaining[1].id]);
-                    for (const p of [...team1, ...team2]) {
-                        event.updateRegistration(p.id, { status: 'PLAYING' });
-                    }
-                    event.games.push(game);
-                    return { success: true, game };
-                }
-            }
+        // Fallback: best 1v2 when only 3 players (or 2v2 somehow unavailable)
+        const best1v2 = this.findBest1v2(available, event);
+        if (best1v2) {
+            return this.commitAssignment(event, eventId, courtId, best1v2);
         }
         return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
     }
@@ -169,111 +367,18 @@ class SchedulingService {
         }
         const totalSelected = team1.length + team2.length;
         if (totalSelected >= 4) {
-            const game = (0, Game_1.createGame)(eventId, courtId, team1, team2);
-            for (const pid of selectedIds) {
-                event.updateRegistration(pid, { status: 'PLAYING' });
-            }
-            event.games.push(game);
-            return { success: true, game };
+            const coPlay = this.buildCoPlayCounts(event);
+            const scored = this.scoreAssignment(team1, team2, event, coPlay);
+            return this.commitAssignment(event, eventId, courtId, scored);
         }
         const remainingNeeded = 4 - totalSelected;
-        let available = this.getAvailablePlayers(event).filter(p => !selectedIds.has(p.id));
+        const available = this.getAvailablePlayers(event).filter(p => !selectedIds.has(p.id));
         if (available.length < remainingNeeded) {
             return { success: false, reason: 'Not enough available players to complete the game', blockingConstraints: ['Insufficient available players'], shouldWait: true };
         }
-        const maxAttempts = Math.min(available.length, 30);
-        // Try 2v2 completion
-        for (let i = 0; i < maxAttempts; i++) {
-            const candidates = available.filter(p => p.id !== available[i].id);
-            const partner = candidates.find(p => !this.hasPlayedTogether(available[i].id, p.id, event));
-            if (!partner)
-                continue;
-            const partnerId = partner.id;
-            const candidateIds = new Set(candidates.map(c => c.id).filter(id => id !== partnerId));
-            let opponentPair = [];
-            const candidateArray = candidates.filter(c => c.id !== partnerId);
-            outer: for (let j = 0; j < candidateArray.length - 1; j++) {
-                for (let k = j + 1; k < candidateArray.length; k++) {
-                    if (!this.hasPlayedTogether(candidateArray[j].id, candidateArray[k].id, event)) {
-                        opponentPair = [candidateArray[j].id, candidateArray[k].id];
-                        break outer;
-                    }
-                }
-            }
-            if (opponentPair.length < 2)
-                continue;
-            const finalTeam1 = [...team1];
-            const finalTeam2 = [...team2];
-            const usedInFill = new Set([...opponentPair, partnerId]);
-            const t1Count = finalTeam1.length;
-            const t2Count = finalTeam2.length;
-            if (t1Count === 0 && t2Count === 0) {
-                finalTeam1.push(available[i].id, partnerId);
-                finalTeam2.push(...opponentPair);
-            }
-            else if (t1Count === 1 && t2Count === 0) {
-                finalTeam1.push(partnerId);
-                finalTeam2.push(...opponentPair);
-            }
-            else if (t1Count === 0 && t2Count === 1) {
-                finalTeam2.push(partnerId);
-                finalTeam1.push(...opponentPair);
-            }
-            else if (t1Count === 1 && t2Count === 1) {
-                finalTeam1.push(partnerId);
-                finalTeam2.push(...opponentPair);
-            }
-            else if (t1Count === 2 && t2Count === 0) {
-                finalTeam2.push(...opponentPair);
-            }
-            else if (t1Count === 0 && t2Count === 2) {
-                finalTeam1.push(...opponentPair);
-            }
-            else if (t1Count === 1 && t2Count === 2) {
-                finalTeam1.push(partnerId);
-            }
-            else if (t1Count === 2 && t2Count === 1) {
-                finalTeam2.push(partnerId);
-            }
-            const game = (0, Game_1.createGame)(eventId, courtId, finalTeam1, finalTeam2);
-            for (const pid of [...finalTeam1, ...finalTeam2]) {
-                event.updateRegistration(pid, { status: 'PLAYING' });
-            }
-            event.games.push(game);
-            return { success: true, game };
-        }
-        // Fallback: 1v2 completion
-        for (let i = 0; i < maxAttempts; i++) {
-            const topPlayer = available[i];
-            const remaining = available.filter(p => p.id !== topPlayer.id);
-            if (remaining.length >= 2) {
-                const finalTeam1 = [...team1];
-                const finalTeam2 = [...team2];
-                if (!this.hasPlayedTogether(remaining[0].id, remaining[1].id, event)) {
-                    if (finalTeam1.length === 0 && finalTeam2.length === 0) {
-                        finalTeam1.push(topPlayer.id);
-                        finalTeam2.push(remaining[0].id, remaining[1].id);
-                    }
-                    else if (finalTeam1.length === 1 && finalTeam2.length === 0) {
-                        finalTeam2.push(topPlayer.id, remaining[0].id, remaining[1].id);
-                    }
-                    else if (finalTeam1.length === 0 && finalTeam2.length === 1) {
-                        finalTeam1.push(topPlayer.id, remaining[0].id, remaining[1].id);
-                    }
-                    else if (finalTeam1.length === 1 && finalTeam2.length === 1) {
-                        finalTeam2.push(topPlayer.id, remaining[0].id, remaining[1].id);
-                    }
-                    else {
-                        continue;
-                    }
-                    const game = (0, Game_1.createGame)(eventId, courtId, finalTeam1, finalTeam2);
-                    for (const pid of [...finalTeam1, ...finalTeam2]) {
-                        event.updateRegistration(pid, { status: 'PLAYING' });
-                    }
-                    event.games.push(game);
-                    return { success: true, game };
-                }
-            }
+        const best = this.findBest2v2(available, event, team1, team2);
+        if (best) {
+            return this.commitAssignment(event, eventId, courtId, best);
         }
         return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
     }
