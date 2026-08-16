@@ -30,12 +30,17 @@ router.delete('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEve
       return res.status(404).json({ error: 'No active allotment on this court' });
     }
 
+    const playerIds = [...active.players.team1, ...active.players.team2];
     const result = schedulingService.cancelGame(req.params.eventId as string, active.id);
     if (!result.success) {
       return res.status(400).json({ error: result.reason });
     }
 
-    await db.persistEvent(req.params.eventId as string);
+    // Delete the game row + update player registrations (PLAYING→WAITING)
+    await Promise.all([
+      db.client.execute('DELETE FROM games WHERE id = ?', [active.id]),
+      db.persistRegistrations(req.params.eventId as string, playerIds),
+    ]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -66,9 +71,14 @@ router.post('/:eventId/schedule', withEventAccess as any, loadEvent as any, asyn
       });
     }
 
-    await db.persistEvent(req.params.eventId as string);
+    const game = result.game!;
+    const playerIds = [...game.players.team1, ...game.players.team2];
+    await Promise.all([
+      db.persistNewGame(game, false),
+      db.persistRegistrations(req.params.eventId as string, playerIds),
+    ]);
     res.status(201).json({
-      ...result.game,
+      ...game,
       ...(result.warning ? { warning: result.warning } : {})
     });
   } catch (err) {
@@ -152,7 +162,11 @@ router.post('/:eventId/courts/:courtId/allot-manual', withEventAccess as any, lo
         });
       }
       // completePartialGame already set PLAYING and pushed the game
-      await db.persistEvent(req.params.eventId as string);
+      const partialPlayerIds = [...result.game.players.team1, ...result.game.players.team2];
+      await Promise.all([
+        db.persistNewGame(result.game, false),
+        db.persistRegistrations(req.params.eventId as string, partialPlayerIds),
+      ]);
       return res.status(201).json({
         ...result.game,
         ...(result.warning ? { warning: result.warning } : {})
@@ -166,7 +180,10 @@ router.post('/:eventId/courts/:courtId/allot-manual', withEventAccess as any, lo
     }
 
     event.games.push(game);
-    await db.persistEvent(req.params.eventId as string);
+    await Promise.all([
+      db.persistNewGame(game, false),
+      db.persistRegistrations(req.params.eventId as string, allGamePlayers),
+    ]);
     res.status(201).json(game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -200,9 +217,15 @@ router.post('/:eventId/courts/:courtId/allot', withEventAccess as any, loadEvent
       });
     }
 
-    await db.persistEvent(req.params.eventId as string);
+    const game = result.game!;
+    const playerIds = [...game.players.team1, ...game.players.team2];
+    // New game row + updated player registrations (WAITING→PLAYING)
+    await Promise.all([
+      db.persistNewGame(game, false),
+      db.persistRegistrations(req.params.eventId as string, playerIds),
+    ]);
     res.status(201).json({
-      ...result.game,
+      ...game,
       ...(result.warning ? { warning: result.warning } : {})
     });
   } catch (err) {
@@ -218,10 +241,11 @@ router.post('/:eventId/games/:gameId/start', withEventAccess as any, loadEvent a
       return res.status(403).json({ error: 'Forbidden' });
     }
     const result = schedulingService.startGame(req.params.eventId as string, req.params.gameId as string);
-    await db.persistEvent(req.params.eventId as string);
     if (!result.success) {
       return res.status(400).json({ error: result.reason });
     }
+    // Only the one game row changed — skip full persistEvent
+    await db.persistGameState(result.game!, false);
     res.json(result.game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -243,8 +267,15 @@ router.post('/:eventId/games/:gameId/end', withEventAccess as any, loadEvent as 
     if (!result.success) {
       return res.status(400).json({ error: result.reason, blockingConstraints: result.blockingConstraints });
     }
-    await db.persistEvent(req.params.eventId as string);
-    res.json(result.game);
+    // Game row changed + player registrations changed (status PLAYING→WAITING, gamesPlayedCount++)
+    // Targeted writes instead of full persistEvent
+    const game = result.game!;
+    const playerIds = [...game.players.team1, ...game.players.team2];
+    await Promise.all([
+      db.persistGameState(game, true),
+      db.persistRegistrations(req.params.eventId as string, playerIds),
+    ]);
+    res.json(game);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -272,7 +303,8 @@ router.post('/:eventId/games/:gameId/score', withEventAccess as any, loadEvent a
     if (activeGame && !activeGame.completed) {
       if (!activeGame.started) return res.status(400).json({ error: 'Game has not started yet' });
       activeGame.scores = scores;
-      await db.persistEvent(req.params.eventId as string);
+      // Targeted write: only the scores column on this one game row
+      await db.persistGameScore(gameId, scores);
       return res.json(activeGame);
     }
 
@@ -284,7 +316,8 @@ router.post('/:eventId/games/:gameId/score', withEventAccess as any, loadEvent a
     if (historyGame) historyGame.scores = scores;
     if (activeGame?.completed) activeGame.scores = scores;
 
-    await db.persistEvent(req.params.eventId as string);
+    // Targeted write: only the scores column on this one game row
+    await db.persistGameScore(gameId, scores);
     res.json(completedGame);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -351,10 +384,22 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
 
     const activeGames = event.games.filter((g: Game) => !g.completed);
 
+    const ev = event as any;
     res.json({
+      // --- identity / metadata (replaces separate GET /events/:id call) ---
+      id: event.id,
+      name: event.name,
+      ownerId: ev.ownerId,
+      numCourts: event.courts,
+      totalGamesToPlay: event.totalGamesToPlay,
+      sharedAccess: event.sharedAccess,
+      registrations: Array.from(event.registrations.values()),
+      games: event.games,
+      gameHistory: event.gameHistory,
+      // --- legacy alias kept for any callers that used eventId ---
       eventId: event.id,
       eventName: event.name,
-      totalGamesToPlay: event.totalGamesToPlay,
+      // --- live counts ---
       gamesPlayed: event.gameHistory.length,
       gamesRemaining: event.totalGamesToPlay - event.gameHistory.length,
       averageGamesPlayed: avgGames,
@@ -383,6 +428,7 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
           name: p.name,
           nickName: reg?.nickName,
           duprId: p.duprId,
+          ownerId: p.ownerId,
           gamesPlayed: reg?.gamesPlayedCount || 0,
           targetGames: reg?.targetGames || 0,
           status: reg?.status || 'UNKNOWN',

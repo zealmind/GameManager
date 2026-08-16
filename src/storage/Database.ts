@@ -240,6 +240,67 @@ export class Database {
   }
 
   /**
+   * Targeted write: update only the scores column of one game row.
+   * Use this instead of persistEvent() when only a score changed.
+   */
+  async persistGameScore(gameId: string, scores: [number, number] | undefined): Promise<void> {
+    await this.client.execute(
+      'UPDATE games SET scores = ? WHERE id = ?',
+      [scores != null ? JSON.stringify(scores) : null, gameId]
+    );
+  }
+
+  /**
+   * Targeted write: update all mutable state columns of one game row
+   * (scores, completed, started, startedAt, completedAt, in_history).
+   * Use this instead of persistEvent() when a game starts or ends.
+   */
+  async persistGameState(game: Game, inHistory: boolean): Promise<void> {
+    await this.client.execute(
+      `UPDATE games SET
+        scores      = ?,
+        completed   = ?,
+        started     = ?,
+        startedAt   = ?,
+        completedAt = ?,
+        in_history  = ?
+       WHERE id = ?`,
+      [
+        game.scores != null ? JSON.stringify(game.scores) : null,
+        game.completed ? 1 : 0,
+        game.started ? 1 : 0,
+        game.startedAt ? (game.startedAt instanceof Date ? game.startedAt.toISOString() : game.startedAt) : null,
+        game.completedAt ? (game.completedAt instanceof Date ? game.completedAt.toISOString() : game.completedAt) : null,
+        inHistory ? 1 : 0,
+        game.id,
+      ]
+    );
+  }
+
+  /**
+   * Targeted write: upsert only specific registration rows by playerId.
+   * Use this instead of persistEvent() when only player statuses changed.
+   */
+  async persistRegistrations(eventId: string, playerIds: string[]): Promise<void> {
+    const event = this.events.get(eventId);
+    if (!event) return;
+    const stmts = playerIds
+      .map(pid => event.registrations.get(pid))
+      .filter((r): r is EventPlayerRegistration => r !== undefined)
+      .map(r => this.registrationUpsertStmt(r));
+    if (stmts.length > 0) await this.batch(stmts);
+  }
+
+  /**
+   * Targeted write: insert a brand-new game row (allot / schedule).
+   * Use this instead of persistEvent() when a single new game is created.
+   */
+  async persistNewGame(game: Game, inHistory: boolean): Promise<void> {
+    const stmt = this.gameUpsertStmt(game, inHistory);
+    await this.client.execute(stmt.sql, stmt.args);
+  }
+
+  /**
    * Persist one event and its related rows only (registrations, games, shares),
    * plus any players attached to the event.
    * Other events are left untouched for better concurrency.

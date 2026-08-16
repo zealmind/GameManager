@@ -170,7 +170,13 @@ router.patch('/:eventId/players/:playerId', withEventAccess as any, loadEvent as
       }
     }
 
-    await db.persistEvent(event.id);
+    // When status is WAITING, recalculateTargetGames may touch all registrations —
+    // fall back to full persist in that case; otherwise just update the one row.
+    if (status === 'WAITING') {
+      await db.persistEvent(event.id);
+    } else {
+      await db.persistRegistrations(event.id, [req.params.playerId as string]);
+    }
     res.json(event.getRegistration(req.params.playerId as string) || updated);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

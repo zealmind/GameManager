@@ -1290,10 +1290,23 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
     if (eventDetailLoadInFlight) return;
     eventDetailLoadInFlight = true;
     try {
-        const [event, status] = await Promise.all([
-            api(`${API_BASE}/events/${eventId}`, { timeoutMs: 12000 }),
-            api(`${API_BASE}/events/${eventId}/status`, { timeoutMs: 12000 })
-        ]);
+        // Single request: /status now includes all metadata (gameHistory, registrations, etc.)
+        const status = await api(`${API_BASE}/events/${eventId}/status`, { timeoutMs: 12000 });
+
+        // Build a lightweight 'event' object from the combined status response so the
+        // rest of the rendering code continues to work without changes.
+        const event = {
+            id: status.id,
+            name: status.name,
+            ownerId: status.ownerId,
+            courts: status.numCourts,
+            totalGamesToPlay: status.totalGamesToPlay,
+            sharedAccess: status.sharedAccess || [],
+            registrations: status.registrations || [],
+            games: status.games || [],
+            gameHistory: status.gameHistory || [],
+            players: status.players || [],
+        };
 
         const container = document.getElementById('event-detail');
         if (!container) return;
