@@ -39,6 +39,47 @@ function isScoreEditingActive() {
     return !!(el && el.classList?.contains('score-input') && el.closest('#event-detail'));
 }
 
+/**
+ * Put a button into a loading state and optionally show a spinner + label.
+ * Returns a restore function — call it to undo the loading state.
+ *   const restore = setButtonLoading(btn, 'Saving...');
+ *   try { ... } finally { restore(); }
+ */
+function setButtonLoading(btn, label) {
+    if (!btn) return () => {};
+    const prevText = btn.innerHTML;
+    const prevDisabled = btn.disabled;
+    const spinnerClass = btn.classList.contains('btn-primary') ||
+                         btn.classList.contains('btn-success') ||
+                         btn.classList.contains('btn-danger') ||
+                         btn.classList.contains('btn-warning')
+        ? 'btn-spinner'
+        : 'btn-spinner btn-spinner--dark';
+    btn.disabled = true;
+    btn.classList.add('btn-loading');
+    if (label) {
+        btn.innerHTML = `<span class="${spinnerClass}"></span> ${label}`;
+    } else {
+        btn.innerHTML = `<span class="${spinnerClass}"></span>`;
+    }
+    return function restore() {
+        btn.disabled = prevDisabled;
+        btn.classList.remove('btn-loading');
+        btn.innerHTML = prevText;
+    };
+}
+
+/**
+ * Set the whole page to "wait" cursor while an async action is in-flight.
+ * Returns a restore function.
+ */
+function beginActionFlight() {
+    document.body.classList.add('action-in-flight');
+    return function end() {
+        document.body.classList.remove('action-in-flight');
+    };
+}
+
 function readScorePairFromEditor(root, gameId) {
     const inputs = root.querySelectorAll(`.score-input[data-game-id="${gameId}"]`);
     const score1 = parseInt(inputs[0]?.value, 10);
@@ -2504,12 +2545,17 @@ function bindEventDetailActions(eventId, event, status) {
         const startBtn = document.getElementById('start-event-btn');
         if (startBtn) {
             startBtn.addEventListener('click', async () => {
+                const restore = setButtonLoading(startBtn, 'Starting...');
+                const endFlight = beginActionFlight();
                 try {
                     await api(`${API_BASE}/events/${eventId}/start`, { method: 'POST' });
                     showToast('Event started!');
                     loadEventDetail(eventId);
                 } catch (err) {
+                    restore();
                     showToast(err.message);
+                } finally {
+                    endFlight();
                 }
             });
         }
@@ -2527,12 +2573,17 @@ function bindEventDetailActions(eventId, event, status) {
                 e.stopPropagation();
                 const playerId = btn.dataset.playerId;
                 if (!confirm('Unregister this player from the event?')) return;
+                const restore = setButtonLoading(btn, 'Removing...');
+                const endFlight = beginActionFlight();
                 try {
                     await api(`${API_BASE}/events/${eventId}/players/${playerId}`, { method: 'DELETE' });
                     showToast('Player unregistered');
                     loadEventDetail(eventId);
                 } catch (err) {
+                    restore();
                     showToast(err.message);
+                } finally {
+                    endFlight();
                 }
             });
         });
@@ -2542,12 +2593,17 @@ function bindEventDetailActions(eventId, event, status) {
             if (endEventBtn) {
                 endEventBtn.addEventListener('click', async () => {
                     if (!confirm('Are you sure you want to end this event?')) return;
+                    const restore = setButtonLoading(endEventBtn, 'Ending...');
+                    const endFlight = beginActionFlight();
                     try {
                         await api(`${API_BASE}/events/${eventId}/end`, { method: 'POST' });
                         showToast('Event ended');
                         loadEventDetail(eventId);
                     } catch (err) {
+                        restore();
                         showToast(err.message);
+                    } finally {
+                        endFlight();
                     }
                 });
             }
@@ -2557,8 +2613,11 @@ function bindEventDetailActions(eventId, event, status) {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const courtId = btn.dataset.courtId;
-                btn.disabled = true;
-                btn.textContent = 'Allotting...';
+                // Optimistic: dim the whole court card immediately
+                const courtCard = btn.closest('.court-card');
+                courtCard?.classList.add('action-pending');
+                const restore = setButtonLoading(btn, 'Allotting...');
+                const endFlight = beginActionFlight();
                 try {
                     const res = await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'POST' });
                     if (res.status && res.status === 'WAITING' && res.message) {
@@ -2579,6 +2638,8 @@ function bindEventDetailActions(eventId, event, status) {
                         loadEventDetail(eventId);
                     }
                 } catch (err) {
+                    courtCard?.classList.remove('action-pending');
+                    restore();
                     if (err.message && err.message.includes('No valid partner/opponent combination found')) {
                         deadlockCourtErrors.set(courtId, err.message);
                         showToast(`Court ${courtId}: Cannot allot right now`);
@@ -2588,6 +2649,8 @@ function bindEventDetailActions(eventId, event, status) {
                         showToast(err.message);
                         loadEventDetail(eventId);
                     }
+                } finally {
+                    endFlight();
                 }
             });
         });
@@ -2604,6 +2667,9 @@ function bindEventDetailActions(eventId, event, status) {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const courtId = btn.dataset.courtId;
+                const courtCard = btn.closest('.court-card');
+                courtCard?.classList.add('action-pending');
+                const endFlight = beginActionFlight();
                 try {
                     await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
                     deadlockCourtErrors.delete(courtId);
@@ -2611,7 +2677,10 @@ function bindEventDetailActions(eventId, event, status) {
                     showToast('Allotment cancelled');
                     loadEventDetail(eventId);
                 } catch (err) {
+                    courtCard?.classList.remove('action-pending');
                     showToast(err.message);
+                } finally {
+                    endFlight();
                 }
             });
         });
@@ -2620,12 +2689,20 @@ function bindEventDetailActions(eventId, event, status) {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const gameId = btn.dataset.gameId;
+                const courtCard = btn.closest('.court-card');
+                courtCard?.classList.add('action-pending');
+                const restore = setButtonLoading(btn, 'Starting...');
+                const endFlight = beginActionFlight();
                 try {
                     await api(`${API_BASE}/events/${eventId}/games/${gameId}/start`, { method: 'POST' });
                     showToast('Game started');
                     loadEventDetail(eventId);
                 } catch (err) {
+                    courtCard?.classList.remove('action-pending');
+                    restore();
                     showToast(err.message);
+                } finally {
+                    endFlight();
                 }
             });
         });
@@ -2641,6 +2718,10 @@ function bindEventDetailActions(eventId, event, status) {
                 if (score1 === 0 && score2 === 0) {
                     [score1, score2] = randomValidScore();
                 }
+                const courtCard = btn.closest('.court-card');
+                courtCard?.classList.add('action-pending');
+                const restore = setButtonLoading(btn, 'Ending...');
+                const endFlight = beginActionFlight();
                 try {
                     const res = await api(`${API_BASE}/events/${eventId}/games/${gameId}/end`, {
                         method: 'POST',
@@ -2650,7 +2731,11 @@ function bindEventDetailActions(eventId, event, status) {
                     showToast('Game ended!');
                     loadEventDetail(eventId);
                 } catch (err) {
+                    courtCard?.classList.remove('action-pending');
+                    restore();
                     showToast(err.message);
+                } finally {
+                    endFlight();
                 }
             });
         });
