@@ -433,7 +433,13 @@ async function api(url, options = {}) {
 }
 
 function switchView(view) {
+    // Shared/moderator users have no dashboard or other views — send them back to root.
+    if (accessMode === 'viewer' || accessMode === 'moderator') {
+        window.location.href = '/';
+        return;
+    }
     navBtns.forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    document.body.classList.remove('hide-bottom-nav');
     if (eventDetailPollInterval) {
         clearInterval(eventDetailPollInterval);
         eventDetailPollInterval = null;
@@ -444,7 +450,7 @@ function switchView(view) {
     editingCourtScoreGameId = null;
     courtScoreEditSnapshot = null;
     if (view === 'dashboard') {
-        renderDashboard();
+        renderDashboard(); // async, intentionally not awaited — renders incrementally
     } else if (view === 'events') {
         renderEvents();
     } else if (view === 'players') {
@@ -458,6 +464,16 @@ function getAccessMode() {
     const moderator = params.get('moderator');
     if (viewer) return { mode: 'viewer', token: viewer };
     if (moderator) return { mode: 'moderator', token: moderator };
+    // Don't restore a stored share token when the user is logged in —
+    // their JWT takes precedence and the share session should not persist
+    // across a regular login navigation.
+    // However, only suppress the share session if the JWT is present AND
+    // there is no share token in the URL (already handled above) — this
+    // prevents an expired JWT from blocking a fresh share-link visit.
+    if (getToken()) {
+        sessionStorage.removeItem('gm_access');
+        return null;
+    }
     const stored = sessionStorage.getItem('gm_access');
     if (stored) {
         try {
@@ -608,6 +624,7 @@ async function initWelcomeScreen() {
                 }
             } else {
                 clearWelcomeError();
+                clearAccessMode(); // discard any stale share token from a previous session
                 dismissWelcomeScreen();
                 switchView('dashboard');
             }
@@ -735,7 +752,10 @@ function logout() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
     const btn = document.getElementById('enter-btn');
-    if (screen) screen.classList.add('active');
+    if (screen) {
+        screen.style.display = '';  // undo the display:none set by dismissWelcomeScreen
+        screen.classList.add('active');
+    }
     if (video) {
         video.currentTime = 0;
         video.play().catch(() => {});
@@ -754,7 +774,11 @@ function logout() {
 function dismissWelcomeScreen() {
     const screen = document.getElementById('welcome-screen');
     const video = document.getElementById('welcome-video');
-    if (screen) screen.classList.remove('active');
+    if (screen) {
+        screen.classList.remove('active');
+        // Fully remove from layout so it cannot intercept touches on any device
+        screen.style.display = 'none';
+    }
     if (video) video.pause();
 }
 
@@ -906,7 +930,21 @@ function switchAuthTab(tab) {
     document.getElementById('auth-error').classList.add('hidden');
 }
 
-function renderDashboard() {
+async function renderDashboard() {
+    // currentUser may be null if we transitioned from share/guest mode.
+    // Fetch the logged-in user before rendering so the name and avatar are correct.
+    if (!currentUser && getToken()) {
+        try {
+            const data = await api(`${API_BASE}/auth/me`, { timeoutMs: 8000 });
+            setUser(data.user);
+        } catch (err) {
+            // Token invalid — clear it and bail out to login
+            clearUser();
+            showLoginModal();
+            return;
+        }
+    }
+
     const user = currentUser || { name: 'Player', email: '' };
     app.innerHTML = `
         <div class="dashboard-header">
@@ -1215,6 +1253,11 @@ function openCopyEventModal(eventId, currentName) {
 async function openEventDetail(eventId, fromShare = false) {
     currentEventId = eventId;
     navBtns.forEach(b => b.classList.remove('active'));
+    // Hide the bottom nav for shared/moderator access — Dashboard and Players
+    // are irrelevant and inaccessible without a full account.
+    if (accessMode === 'viewer' || accessMode === 'moderator') {
+        document.body.classList.add('hide-bottom-nav');
+    }
     app.innerHTML = `
         <div class="app-header">
             ${showBackButton()}
@@ -1510,7 +1553,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         if (!players.length) return '';
         const sorted = sortPlayersByNickName(players, nickNameMap);
         return `
-            <div class="player-group">
+            <div class="player-group" data-group-key="${title.toLowerCase()}">
                 <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
                 <div class="player-group-content">
                     ${sorted.map(p => `
@@ -1807,7 +1850,14 @@ function togglePlayerGroup(header) {
     if (content && content.classList.contains('player-group-content')) {
         const isHidden = content.style.display === 'none';
         content.style.display = isHidden ? 'block' : 'none';
-        header.innerHTML = header.innerHTML.replace(/ \&#9662;| \&#9652;/, '') + (isHidden ? ' &#9662;' : ' &#9652;');
+        // Strip both the HTML entity form and the rendered unicode character form
+        header.innerHTML = header.innerHTML.replace(/ (?:&#9662;|&#9652;|\u25BE|\u25B4|\u25BC|\u25B2|\u25BE|\u25B4)/g, '') + (isHidden ? ' &#9662;' : ' &#9652;');
+        // Persist collapsed state
+        const group = header.closest('[data-group-key]');
+        if (group && currentEventId) {
+            const key = `gm_event_${currentEventId}_group_${group.dataset.groupKey}_collapsed`;
+            localStorage.setItem(key, String(!isHidden));
+        }
     }
 }
 
@@ -1901,6 +1951,18 @@ function bindCollapsibleSections(eventId, status) {
     }
 
     bindLeaderboardExpand(eventId);
+
+    // Restore per-group collapsed state (Waiting, Playing, Away, etc.)
+    document.querySelectorAll('#players-list [data-group-key]').forEach(group => {
+        const key = `gm_event_${eventId}_group_${group.dataset.groupKey}_collapsed`;
+        const stored = localStorage.getItem(key);
+        if (stored === 'true') {
+            const content = group.querySelector('.player-group-content');
+            const header = group.querySelector('.card-subtitle');
+            if (content) content.style.display = 'none';
+            if (header) header.innerHTML = header.innerHTML.replace(/ (?:&#9662;|&#9652;|\u25BE|\u25B4|\u25BC|\u25B2)/g, '') + ' &#9652;';
+        }
+    });
 }
 
 function formatDuration(ms) {
@@ -2719,7 +2781,10 @@ function openAddPlayersModal(eventId, selectedIds) {
             </div>
             <div class="form-group">
                 <label>Search / Add New</label>
-                <input type="text" id="player-search" placeholder="Type name or DUPR ID, Enter to add" autocomplete="off">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="text" id="player-search" placeholder="Type name or DUPR ID..." autocomplete="off" style="flex:1">
+                    <button type="button" id="create-player-inline-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;font-size:1.2rem;line-height:1;padding:4px 10px;">+</button>
+                </div>
             </div>
             <div id="available-players-list">Loading...</div>
             <button type="button" class="btn btn-primary mt-2" id="confirm-add-players">Add Selected</button>
@@ -2733,7 +2798,7 @@ function openAddPlayersModal(eventId, selectedIds) {
     let selected = new Set(selectedIds);
     let searchQuery = '';
 
-    api(`${API_BASE}/players`).then(players => {
+    api(`${API_BASE}/players/all`).then(players => {
         allPlayers = players;
         renderPlayerCheckboxes();
     });
@@ -2755,15 +2820,27 @@ function openAddPlayersModal(eventId, selectedIds) {
         ) || null;
     }
 
+    function hasNoMatch(query) {
+        if (!query) return false;
+        return allPlayers.filter(p => playerMatchesQuery(p, query)).length === 0;
+    }
+
+    function updateCreateBtn() {
+        const btn = document.getElementById('create-player-inline-btn');
+        if (btn) btn.style.display = searchQuery && hasNoMatch(searchQuery) ? '' : 'none';
+    }
+
     function renderPlayerCheckboxes() {
         const container = document.getElementById('available-players-list');
         const filtered = allPlayers.filter(p => playerMatchesQuery(p, searchQuery));
         if (!allPlayers.length) {
-            container.innerHTML = '<div class="text-muted">No players available. Type a name and press Enter to add.</div>';
+            container.innerHTML = '<div class="text-muted">No players yet. Type a name and press Enter or tap <strong>+</strong> to create one.</div>';
+            updateCreateBtn();
             return;
         }
         if (!filtered.length) {
-            container.innerHTML = '<div class="text-muted">No matching players. Press Enter to create a new one.</div>';
+            container.innerHTML = '<div class="text-muted">No matching players. Press Enter or tap <strong>+</strong> to create a new one.</div>';
+            updateCreateBtn();
             return;
         }
         container.innerHTML = filtered.map(p => `
@@ -2778,6 +2855,82 @@ function openAddPlayersModal(eventId, selectedIds) {
                 else selected.delete(e.target.value);
             });
         });
+        updateCreateBtn();
+    }
+
+    // Opens the create-player sub-dialog, pre-filling name with the current search query.
+    function openCreatePlayerDialog() {
+        const prefill = searchQuery;
+        const dlg = document.createElement('div');
+        dlg.className = 'modal-overlay active';
+        dlg.style.zIndex = '1100';
+        dlg.innerHTML = `
+            <div class="modal">
+                <div class="modal-header">
+                    <div class="modal-title">Create New Player</div>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <form id="inline-create-player-form">
+                    <div class="form-group">
+                        <label>Player Name</label>
+                        <input type="text" name="name" required placeholder="Enter player name" value="${escapeHtml(prefill)}">
+                    </div>
+                    <div class="form-group">
+                        <label>DUPR ID <span class="text-muted">(optional)</span></label>
+                        <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
+                    </div>
+                    <p id="inline-create-player-error" class="auth-error hidden"></p>
+                    <button type="submit" class="btn btn-primary">Create &amp; Select</button>
+                </form>
+            </div>
+        `;
+        document.body.appendChild(dlg);
+        dlg.querySelector('.modal-close').addEventListener('click', () => dlg.remove());
+        dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.remove(); });
+        // Focus the name field at end of pre-filled text
+        const nameInput = dlg.querySelector('input[name="name"]');
+        nameInput.focus();
+        nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
+
+        const errorEl = dlg.querySelector('#inline-create-player-error');
+        dlg.querySelector('#inline-create-player-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.classList.add('hidden');
+            const fd = new FormData(e.target);
+            const name = String(fd.get('name') || '').trim();
+            const duprId = String(fd.get('duprId') || '').trim();
+            if (!name) return;
+            try {
+                const player = await api(`${API_BASE}/players`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name, ...(duprId ? { duprId } : {}) })
+                });
+                allPlayers.push(player);
+                selected.add(player.id);
+                // Clear search so the new player is visible in the list
+                const searchInput = document.getElementById('player-search');
+                if (searchInput) { searchInput.value = ''; }
+                searchQuery = '';
+                renderPlayerCheckboxes();
+                dlg.remove();
+                showToast(`Player "${escapeHtml(player.name)}" created and selected`);
+            } catch (err) {
+                // If already exists globally, just select it
+                const fallback = allPlayers.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+                if (fallback) {
+                    selected.add(fallback.id);
+                    const searchInput = document.getElementById('player-search');
+                    if (searchInput) { searchInput.value = ''; }
+                    searchQuery = '';
+                    renderPlayerCheckboxes();
+                    dlg.remove();
+                    showToast(`Selected existing player "${escapeHtml(fallback.name)}"`);
+                } else {
+                    errorEl.textContent = err.message;
+                    errorEl.classList.remove('hidden');
+                }
+            }
+        });
     }
 
     const searchInput = document.getElementById('player-search');
@@ -2786,46 +2939,29 @@ function openAddPlayersModal(eventId, selectedIds) {
         renderPlayerCheckboxes();
     });
 
-    searchInput.addEventListener('keydown', async (e) => {
+    searchInput.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
         e.preventDefault();
-        const query = e.target.value.trim();
+        const query = searchInput.value.trim();
         if (!query) return;
 
+        // If there's an exact match, just select it
         const existing = findExactPlayerMatch(query);
         if (existing) {
             selected.add(existing.id);
-            e.target.value = '';
+            searchInput.value = '';
             searchQuery = '';
             renderPlayerCheckboxes();
             showToast(`Selected ${withDuprId(existing.name, existing)}`);
             return;
         }
 
-        try {
-            const player = await api(`${API_BASE}/players`, {
-                method: 'POST',
-                body: JSON.stringify({ name: query })
-            });
-            allPlayers.push(player);
-            selected.add(player.id);
-            e.target.value = '';
-            searchQuery = '';
-            renderPlayerCheckboxes();
-        } catch (err) {
-            // Name may already exist under a different casing; try selecting it.
-            const fallback = findExactPlayerMatch(query) ||
-                allPlayers.find(p => p.name.trim().toLowerCase() === query.toLowerCase());
-            if (fallback) {
-                selected.add(fallback.id);
-                e.target.value = '';
-                searchQuery = '';
-                renderPlayerCheckboxes();
-                showToast(`Selected ${withDuprId(fallback.name, fallback)}`);
-            } else {
-                showToast(err.message);
-            }
-        }
+        // No match — open the create dialog
+        openCreatePlayerDialog();
+    });
+
+    document.getElementById('create-player-inline-btn').addEventListener('click', () => {
+        openCreatePlayerDialog();
     });
 
     document.getElementById('confirm-add-players').addEventListener('click', async () => {

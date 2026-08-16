@@ -701,10 +701,8 @@ export class Database {
     return Array.from(this.events.values()).filter((e: any) => e.ownerId === userId);
   }
 
-  getModeratedEvents(userId: string): Event[] {
-    return Array.from(this.events.values()).filter((e: any) =>
-      e.ownerId !== userId && e.sharedAccess && e.sharedAccess.length > 0
-    );
+  getModeratedEvents(_userId: string): Event[] {
+    return [];
   }
 
   getEventRegistration(eventId: string, playerId: string): EventPlayerRegistration | undefined {
