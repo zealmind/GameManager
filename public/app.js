@@ -221,6 +221,7 @@ function applyScorePairToEditor(root, gameId, score1, score2) {
 
 async function closeCourtScoreEditor(gameId, { save = true, eventId = null } = {}) {
     const card = document.querySelector(`.court-game-card[data-game-id="${gameId}"]`);
+    const courtCard = card?.closest('.court-card');
     const scores = card?.querySelector(`.court-scores[data-game-id="${gameId}"]`);
     if (scores) {
         if (!save && courtScoreEditSnapshot?.gameId === gameId) {
@@ -230,6 +231,7 @@ async function closeCourtScoreEditor(gameId, { save = true, eventId = null } = {
             const { score1, score2 } = syncCourtScoreCompactDisplay(scores, gameId);
             setGameLocalScore(gameId, score1, score2);
             if (save && eventId) {
+                courtCard?.classList.add('action-pending');
                 try {
                     await api(`${API_BASE}/events/${eventId}/games/${gameId}/score`, {
                         method: 'POST',
@@ -238,6 +240,8 @@ async function closeCourtScoreEditor(gameId, { save = true, eventId = null } = {
                     localGameScores.delete(gameId);
                 } catch (err) {
                     // keep local draft on failure
+                } finally {
+                    courtCard?.classList.remove('action-pending');
                 }
             }
         }
@@ -352,7 +356,16 @@ function clearUser() {
 }
 
 function isLoggedIn() {
-  return !!getToken();
+    return !!getToken();
+}
+
+function confirmStrong(message, answer = '') {
+    const response = prompt(message);
+    if (response !== answer) {
+        showToast('Confirmation aborted');
+        return false;
+    }
+    return true;
 }
 
 function showToast(msg, opts = {}) {
@@ -2545,6 +2558,7 @@ function bindEventDetailActions(eventId, event, status) {
         const startBtn = document.getElementById('start-event-btn');
         if (startBtn) {
             startBtn.addEventListener('click', async () => {
+                if (!confirmStrong('Type "Start Event" to confirm event start', 'Start Event')) return;
                 const restore = setButtonLoading(startBtn, 'Starting...');
                 const endFlight = beginActionFlight();
                 try {
@@ -2592,7 +2606,7 @@ function bindEventDetailActions(eventId, event, status) {
             const endEventBtn = document.getElementById('end-event-btn');
             if (endEventBtn) {
                 endEventBtn.addEventListener('click', async () => {
-                    if (!confirm('Are you sure you want to end this event?')) return;
+                    if (!confirmStrong('Type "End Event" to confirm event termination', 'End Event')) return;
                     const restore = setButtonLoading(endEventBtn, 'Ending...');
                     const endFlight = beginActionFlight();
                     try {
@@ -2750,7 +2764,12 @@ function bindEventDetailActions(eventId, event, status) {
                     showToast('Cannot determine court for this game');
                     return;
                 }
-                if (!confirm('Cancel this game? Players will be returned to waiting.')) return;
+                // Strong warning: require user to type "Cancel Game" to confirm
+                const confirmed = prompt('Type "Cancel Game" to confirm cancellation of this game. This will return all players to waiting status.');
+                if (confirmed !== 'Cancel Game') {
+                    showToast('Cancellation aborted');
+                    return;
+                }
                 try {
                     await api(`${API_BASE}/events/${eventId}/courts/${courtId}/allot`, { method: 'DELETE' });
                     showToast('Game cancelled');
@@ -2812,6 +2831,8 @@ function bindEventDetailActions(eventId, event, status) {
             const gameId = btn.dataset.gameId;
             const editRow = container.querySelector(`.game-score-edit[data-game-id="${gameId}"]`);
             const { score1, score2 } = readScorePairFromEditor(editRow, gameId);
+            const courtCard = btn.closest('.court-card');
+            courtCard?.classList.add('action-pending');
             try {
                 await api(`${API_BASE}/events/${eventId}/games/${gameId}/score`, {
                     method: 'POST',
@@ -2823,6 +2844,8 @@ function bindEventDetailActions(eventId, event, status) {
                 loadEventDetail(eventId);
             } catch (err) {
                 showToast(err.message);
+            } finally {
+                courtCard?.classList.remove('action-pending');
             }
         });
     });
