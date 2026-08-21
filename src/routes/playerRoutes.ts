@@ -44,6 +44,16 @@ router.get('/', authenticate, (req: AuthenticatedRequest, res) => {
   }
 });
 
+// GET /players/all - List all players (authenticated)
+router.get('/all', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const players = db.getAllPlayers();
+    res.json(players);
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /players/:playerId - Retrieve player details
 router.get('/:playerId', authenticate, async (req: AuthenticatedRequest, res) => {
   try {
@@ -195,6 +205,16 @@ router.delete('/:playerId', authenticate, async (req: AuthenticatedRequest, res)
     }
     await db.deletePlayer(req.params.playerId as string);
     res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// GET /players/all - List all players (authenticated)
+router.get('/all', authenticate, async (req: AuthenticatedRequest, res) => {
+  try {
+    const players = db.getAllPlayers();
+    res.json(players);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }
