@@ -137,6 +137,10 @@ router.post('/:eventId/players', withEventAccess as any, loadEvent as any, async
       return res.status(400).json({ error: 'Either player_id or name must be provided' });
     }
 
+    if (event.isFixedPartnerDoubles()) {
+      return res.status(400).json({ error: 'Use POST /events/:eventId/teams to add fixed partner teams' });
+    }
+
     const existingReg = event.getRegistration(player.id);
     if (existingReg) {
       return res.status(409).json({ error: 'Player already registered for this event' });
@@ -166,28 +170,40 @@ router.patch('/:eventId/players/:playerId', withEventAccess as any, loadEvent as
       return res.status(400).json({ error: 'Invalid status. Must be WAITING, PLAYING, UNAVAILABLE, AWAY, or RETIRED' });
     }
 
-    const updated = event.updateRegistration(req.params.playerId as string, { status });
+    const playerId = req.params.playerId as string;
+    const updated = event.getRegistration(playerId);
     if (!updated) {
       return res.status(404).json({ error: 'Player registration not found for this event' });
     }
 
+    if (event.isFixedPartnerDoubles()) {
+      event.setTeamStatus(playerId, status);
+    } else {
+      event.updateRegistration(playerId, { status });
+    }
+
     if (status === 'WAITING') {
       event.recalculateTargetGames();
-      // Ensure returned players are allotment-eligible (priority > 0)
-      const reg = event.getRegistration(req.params.playerId as string);
+      const reg = event.getRegistration(playerId);
       if (reg && reg.priority <= 0) {
-        event.updateRegistration(req.params.playerId as string, { priority: 5 });
+        if (event.isFixedPartnerDoubles()) {
+          event.syncTeamRegistration(playerId, { priority: 5 });
+        } else {
+          event.updateRegistration(playerId, { priority: 5 });
+        }
       }
     }
 
-    // When status is WAITING, recalculateTargetGames may touch all registrations —
-    // fall back to full persist in that case; otherwise just update the one row.
+    const affectedIds = event.isFixedPartnerDoubles()
+      ? [playerId, event.getTeamMate(playerId)].filter((id): id is string => !!id)
+      : [playerId];
+
     if (status === 'WAITING') {
       await db.persistEvent(event.id);
     } else {
-      await db.persistRegistrations(event.id, [req.params.playerId as string]);
+      await db.persistRegistrations(event.id, affectedIds);
     }
-    res.json(event.getRegistration(req.params.playerId as string) || updated);
+    res.json(event.getRegistration(playerId) || updated);
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
   }

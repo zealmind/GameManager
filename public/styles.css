@@ -572,6 +572,46 @@ body.hide-bottom-nav .bottom-nav {
     accent-color: var(--primary);
 }
 
+.team-player-picker-list {
+    max-height: 160px;
+    overflow-y: auto;
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+}
+
+.team-player-option {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    font-size: 14px;
+    cursor: pointer;
+    color: var(--text);
+}
+
+.team-player-option:last-child {
+    border-bottom: none;
+}
+
+.team-player-option:hover:not(:disabled) {
+    background: rgba(37, 99, 235, 0.08);
+}
+
+.team-player-option.is-selected {
+    background: rgba(37, 99, 235, 0.14);
+    font-weight: 600;
+}
+
+.team-player-option:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
 /* Court / Game Field — calm pickleball look */
 .game-field-card {
     background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);

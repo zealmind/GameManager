@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { Database } from '../storage/Database';
 import { SchedulingService } from '../services/SchedulingService';
 import { createGame, Game } from '../models/Game';
+import type { EventTeam } from '../models/Event';
 import { authenticate, AuthenticatedRequest, ShareAccess } from '../middleware/auth';
 import { withEventAccess, requireOwnerOrModerator, loadEvent } from '../middleware/eventAccess';
 
@@ -385,13 +386,35 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
     const activeGames = event.games.filter((g: Game) => !g.completed);
 
     const ev = event as any;
+    const teams = event.isFixedPartnerDoubles()
+      ? event.getTeams().map((team: EventTeam) => ({
+          id: team.id,
+          playerIds: team.playerIds,
+          gamesPlayed: team.gamesPlayed,
+          targetGames: team.targetGames,
+          status: team.status,
+          priority: team.priority,
+          players: team.playerIds.map((pid: string) => {
+            const p = event.players.get(pid);
+            const reg = event.registrations.get(pid);
+            return {
+              id: pid,
+              name: p?.name || pid.slice(0, 8),
+              nickName: reg?.nickName,
+            };
+          }),
+        }))
+      : [];
+
     res.json({
       // --- identity / metadata (replaces separate GET /events/:id call) ---
       id: event.id,
       name: event.name,
+      format: event.format,
       ownerId: ev.ownerId,
       numCourts: event.courts,
       totalGamesToPlay: event.totalGamesToPlay,
+      teams,
       sharedAccess: event.sharedAccess,
       registrations: Array.from(event.registrations.values()),
       games: event.games,
@@ -423,6 +446,8 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
           const partner = event.players.get(pid);
           return partner ? partner.name : pid.slice(0, 8);
         });
+        const fixedPartnerId = reg?.fixedPartnerId;
+        const fixedPartner = fixedPartnerId ? event.players.get(fixedPartnerId) : undefined;
         return {
           id: p.id,
           name: p.name,
@@ -433,7 +458,9 @@ router.get('/:eventId/status', withEventAccess as any, loadEvent as any, async (
           targetGames: reg?.targetGames || 0,
           status: reg?.status || 'UNKNOWN',
           partners: partnerNames,
-          partnerIds
+          partnerIds,
+          fixedPartnerId,
+          fixedPartnerName: fixedPartner?.name,
         };
       }),
       activeGames: activeGames.map((g: Game) => ({

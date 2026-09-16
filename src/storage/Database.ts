@@ -1,6 +1,6 @@
 import { createClient } from "@libsql/client";
 import { Player } from '../models/Player';
-import { Event } from '../models/Event';
+import { Event, teamKey, type EventFormat } from '../models/Event';
 import type { EventPlayerRegistration } from '../models/EventPlayerRegistration';
 import type { Game } from '../models/Game';
 import crypto from 'node:crypto';
@@ -100,6 +100,8 @@ export class Database {
 
     await this.migrateAddDuprId();
     await this.migrateAddRegistrationNickName();
+    await this.migrateAddEventFormat();
+    await this.migrateAddFixedPartnerId();
     await this.load();
   }
 
@@ -116,6 +118,22 @@ export class Database {
   private async migrateAddRegistrationNickName(): Promise<void> {
     try {
       await this.client.execute('ALTER TABLE registrations ADD COLUMN nick_name TEXT');
+    } catch {
+      // column already exists
+    }
+  }
+
+  private async migrateAddEventFormat(): Promise<void> {
+    try {
+      await this.client.execute("ALTER TABLE events ADD COLUMN format TEXT NOT NULL DEFAULT 'ROTATING_DOUBLES'");
+    } catch {
+      // column already exists
+    }
+  }
+
+  private async migrateAddFixedPartnerId(): Promise<void> {
+    try {
+      await this.client.execute('ALTER TABLE registrations ADD COLUMN fixed_partner_id TEXT');
     } catch {
       // column already exists
     }
@@ -173,15 +191,16 @@ export class Database {
 
   private registrationUpsertStmt(r: EventPlayerRegistration): { sql: string; args: any[] } {
     return {
-      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(eventId, playerId) DO UPDATE SET
               gamesPlayedCount = excluded.gamesPlayedCount,
               status = excluded.status,
               targetGames = excluded.targetGames,
               partners = excluded.partners,
               priority = excluded.priority,
-              nick_name = excluded.nick_name`,
+              nick_name = excluded.nick_name,
+              fixed_partner_id = excluded.fixed_partner_id`,
       args: [
         r.eventId,
         r.playerId,
@@ -191,6 +210,7 @@ export class Database {
         JSON.stringify(r.partners || []),
         r.priority ?? 10,
         r.nickName ?? null,
+        r.fixedPartnerId ?? null,
       ],
     };
   }
@@ -317,15 +337,16 @@ export class Database {
     }
 
     stmts.push({
-      sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               courts = excluded.courts,
               totalGamesToPlay = excluded.totalGamesToPlay,
               startedAt = excluded.startedAt,
               endedAt = excluded.endedAt,
-              owner_id = excluded.owner_id`,
+              owner_id = excluded.owner_id,
+              format = excluded.format`,
       args: [
         event.id,
         event.name,
@@ -334,6 +355,7 @@ export class Database {
         event.startedAt ? event.startedAt.toISOString() : null,
         event.endedAt ? event.endedAt.toISOString() : null,
         (event as any).ownerId || null,
+        event.format || 'ROTATING_DOUBLES',
       ],
     });
 
@@ -410,10 +432,10 @@ export class Database {
       }
 
       const eventRows = await this.client.execute(
-        'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id FROM events'
+        'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format FROM events'
       );
       const regRows = await this.client.execute(
-        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name FROM registrations'
+        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id FROM registrations'
       );
       const gameRows = await this.client.execute(
         `SELECT id, eventId, gameNumber, courtId, players, scores, createdAt,
@@ -435,6 +457,7 @@ export class Database {
           partners,
           priority: row.priority != null ? Number(row.priority) : 10,
           nickName: row.nick_name || undefined,
+          fixedPartnerId: row.fixed_partner_id || undefined,
         };
         const list = regsByEvent.get(reg.eventId) || [];
         list.push(reg);
@@ -488,7 +511,8 @@ export class Database {
       }
 
       for (const row of eventRows.rows as any[]) {
-        const event = new Event(row.name, Number(row.totalGamesToPlay), Number(row.courts));
+        const format = (row.format as EventFormat) || 'ROTATING_DOUBLES';
+        const event = new Event(row.name, Number(row.totalGamesToPlay), Number(row.courts), format);
         event.id = row.id;
         event.startedAt = row.startedAt ? new Date(row.startedAt) : undefined;
         event.endedAt = row.endedAt ? new Date(row.endedAt) : undefined;
@@ -657,14 +681,20 @@ export class Database {
     return Array.from(this.events.values()).filter((e: any) => e.ownerId === ownerId);
   }
 
-  async createEvent(name: string, totalGamesToPlay: number, numCourts: number, ownerId: string): Promise<Event> {
-    const event = new Event(name, totalGamesToPlay, numCourts);
+  async createEvent(
+    name: string,
+    totalGamesToPlay: number,
+    numCourts: number,
+    ownerId: string,
+    format: EventFormat = 'ROTATING_DOUBLES'
+  ): Promise<Event> {
+    const event = new Event(name, totalGamesToPlay, numCourts, format);
     (event as any).ownerId = ownerId;
     event.sharedAccess = [];
     this.events.set(event.id, event);
     await this.client.execute(
-      'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId]
+      'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId, event.format]
     );
     return event;
   }
@@ -677,10 +707,29 @@ export class Database {
     const source = this.events.get(sourceEventId);
     if (!source) throw new Error('Event not found');
 
-    const event = await this.createEvent(name, source.totalGamesToPlay, source.courts, ownerId);
-    for (const player of source.players.values()) {
-      const canonical = this.players.get(player.id) || player;
-      event.addPlayer(canonical);
+    const event = await this.createEvent(
+      name,
+      source.totalGamesToPlay,
+      source.courts,
+      ownerId,
+      source.format
+    );
+    if (source.isFixedPartnerDoubles()) {
+      const seen = new Set<string>();
+      for (const reg of source.registrations.values()) {
+        if (!reg.fixedPartnerId) continue;
+        const key = teamKey(reg.playerId, reg.fixedPartnerId);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const playerA = this.players.get(reg.playerId) || source.players.get(reg.playerId)!;
+        const playerB = this.players.get(reg.fixedPartnerId) || source.players.get(reg.fixedPartnerId)!;
+        event.addTeam(playerA, playerB);
+      }
+    } else {
+      for (const player of source.players.values()) {
+        const canonical = this.players.get(player.id) || player;
+        event.addPlayer(canonical);
+      }
     }
     await this.persistEvent(event.id);
     return event;

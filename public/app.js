@@ -453,6 +453,45 @@ function getGamePlayerDisplayName(playerId, status, nickNameMap) {
     return escapedLabel;
 }
 
+function isFixedPartnerEvent(eventOrStatus) {
+    return (eventOrStatus?.format || 'ROTATING_DOUBLES') === 'FIXED_PARTNER_DOUBLES';
+}
+
+function getEventTeams(status) {
+    return status.teams || [];
+}
+
+function teamKeyFromPlayerIds(playerIds) {
+    const sorted = [...playerIds].sort();
+    return `${sorted[0]}|${sorted[1]}`;
+}
+
+function getTeamPlayer(status, playerId) {
+    return (status.players || []).find(p => p.id === playerId);
+}
+
+function formatTeamNames(team, status, nickNameMap, showNickNames = true) {
+    const names = (team.playerIds || []).map(pid => {
+        const player = getTeamPlayer(status, pid) || team.players?.find(p => p.id === pid);
+        if (!player) return pid.slice(0, 8);
+        return getPlayerLabel(player, nickNameMap, showNickNames);
+    });
+    return names.join(' / ');
+}
+
+function getTeamListDisplayName(team, status, nickNameMap, showNickNames = true) {
+    const label = formatTeamNames(team, status, nickNameMap, showNickNames);
+    const escapedLabel = escapeHtml(label);
+    if ((team.gamesPlayed || 0) >= (team.targetGames || 0)) {
+        return `<span class="fulfilled-indicator"></span>${escapedLabel}`;
+    }
+    return escapedLabel;
+}
+
+function getTeamGamePlayerDisplayName(playerIds, status, nickNameMap) {
+    return (playerIds || []).map(pid => getGamePlayerDisplayName(pid, status, nickNameMap)).join(' / ');
+}
+
 async function api(url, options = {}) {
     const token = getToken();
     const controller = new AbortController();
@@ -1084,7 +1123,7 @@ async function loadEventsList() {
             <div class="list-item" data-event-id="${e.id}">
                 <div style="flex:1">
                     <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
-                    <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
+                    <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${isFixedPartnerEvent(e) ? 'Fixed partners' : 'Rotating'} | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
                 <div class="list-item-actions">${actionHtml}</div>
             </div>
@@ -1156,7 +1195,14 @@ function openCreateEventModal() {
                     <input type="text" name="name" required placeholder="e.g. Friday Night Pickleball">
                 </div>
                 <div class="form-group">
-                    <label>Allowed number of Games per player</label>
+                    <label>Event Format</label>
+                    <select name="format" id="event-format-select">
+                        <option value="ROTATING_DOUBLES">Rotating Doubles</option>
+                        <option value="FIXED_PARTNER_DOUBLES">Fixed Partner Doubles</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label id="games-per-label">Allowed number of Games per player</label>
                     <input type="number" name="totalGamesToPlay" required min="1" value="6">
                 </div>
                 <div class="form-group">
@@ -1170,19 +1216,30 @@ function openCreateEventModal() {
     document.body.appendChild(overlay);
     overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const formatSelect = document.getElementById('event-format-select');
+    const gamesPerLabel = document.getElementById('games-per-label');
+    formatSelect.addEventListener('change', () => {
+        gamesPerLabel.textContent = formatSelect.value === 'FIXED_PARTNER_DOUBLES'
+            ? 'Allowed number of Games per team'
+            : 'Allowed number of Games per player';
+    });
+
     document.getElementById('create-event-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = new FormData(e.target);
         const name = (fd.get('name') || '').trim();
         const totalGamesToPlay = parseInt(fd.get('totalGamesToPlay'));
         const numCourts = parseInt(fd.get('numCourts'));
+        const format = fd.get('format') || 'ROTATING_DOUBLES';
 
         if (!name) {
             showToast('Event Name is required');
             return;
         }
         if (!totalGamesToPlay || totalGamesToPlay < 1) {
-            showToast('Allowed Games per Player must be at least 1');
+            showToast(format === 'FIXED_PARTNER_DOUBLES'
+                ? 'Allowed Games per Team must be at least 1'
+                : 'Allowed Games per Player must be at least 1');
             return;
         }
         if (!numCourts || numCourts < 1) {
@@ -1196,7 +1253,8 @@ function openCreateEventModal() {
                 body: JSON.stringify({
                     name,
                     totalGamesToPlay,
-                    numCourts
+                    numCourts,
+                    format
                 })
             });
             overlay.remove();
@@ -1352,6 +1410,7 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
         const event = {
             id: status.id,
             name: status.name,
+            format: status.format || 'ROTATING_DOUBLES',
             ownerId: status.ownerId,
             courts: status.numCourts,
             totalGamesToPlay: status.totalGamesToPlay,
@@ -1360,6 +1419,8 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
             games: status.games || [],
             gameHistory: status.gameHistory || [],
             players: status.players || [],
+            teams: status.teams || [],
+            startedAt: status.startedAt,
         };
 
         const container = document.getElementById('event-detail');
@@ -1475,13 +1536,37 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
 }
 
 function renderRegistrationPhase(event, status) {
+    const fixed = isFixedPartnerEvent(status);
+    const teams = getEventTeams(status);
+    const registeredCount = fixed ? teams.length : status.players.length;
+    const canStart = fixed ? teams.length >= 2 : status.players.length >= 4;
+    const startHint = fixed ? 'Need at least 2 teams to start' : 'Need at least 4 players to start';
+
+    const listHtml = fixed
+        ? (teams.length ? teams.map(team => `
+            <div class="player-row">
+                <div class="player-info">
+                    <div class="player-name">${escapeHtml(formatTeamNames(team, status, buildNickNameMap(status.players), false))}<span class="games-played-badge">${team.gamesPlayed || 0}</span></div>
+                </div>
+                <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${team.playerIds[0]}">Unregister Team</button>
+            </div>
+        `).join('') : '<div class="text-muted">No teams registered yet</div>')
+        : (status.players.length ? status.players.map(p => `
+            <div class="player-row">
+                <div class="player-info">
+                    <div class="player-name">${escapeHtml(p.name)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
+                </div>
+                <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${p.id}">Unregister</button>
+            </div>
+        `).join('') : '<div class="text-muted">No players registered yet</div>');
+
     return `
         <div class="card">
             <div class="card-subtitle mb-2">Progress</div>
             <div class="status-bar">
                 <div class="status-chip">
-                    <div class="status-value">${status.players.length}</div>
-                    <div class="status-label">Registered</div>
+                    <div class="status-value">${registeredCount}</div>
+                    <div class="status-label">${fixed ? 'Teams' : 'Registered'}</div>
                 </div>
                 <div class="status-chip">
                     <div class="status-value">${event.totalGamesToPlay}</div>
@@ -1496,25 +1581,18 @@ function renderRegistrationPhase(event, status) {
 
         <div class="card">
             <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px;">Players</div>
-                <button class="btn btn-primary btn-sm" id="add-players-btn">+ Add Players</button>
+                <div class="card-title" style="font-size:16px;">${fixed ? 'Teams' : 'Players'}</div>
+                <button class="btn btn-primary btn-sm" id="add-players-btn">${fixed ? '+ Add Team' : '+ Add Players'}</button>
             </div>
             <div id="players-list">
-                ${status.players.length ? status.players.map(p => `
-                    <div class="player-row">
-                        <div class="player-info">
-                            <div class="player-name">${escapeHtml(p.name)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
-                        </div>
-                        <button class="btn btn-danger btn-sm unregister-btn" data-player-id="${p.id}">Unregister</button>
-                    </div>
-                `).join('') : '<div class="text-muted">No players registered yet</div>'}
+                ${listHtml}
             </div>
         </div>
 
-        <button class="btn btn-success" id="start-event-btn" ${status.players.length < 4 ? 'disabled style="opacity:0.6;"' : ''}>
+        <button class="btn btn-success" id="start-event-btn" ${!canStart ? 'disabled style="opacity:0.6;"' : ''}>
             Start Event
         </button>
-        ${status.players.length < 4 ? '<div class="text-center text-muted mt-2">Need at least 4 players to start</div>' : ''}
+        ${!canStart ? `<div class="text-center text-muted mt-2">${startHint}</div>` : ''}
     `;
 }
 
@@ -1609,32 +1687,90 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
         courtsHtml += `</div>`;
     });
     
-    const waiting = status.players.filter(p => p.status === 'WAITING');
-    const playing = status.players.filter(p => p.status === 'PLAYING');
-    const away = status.players.filter(p => p.status === 'AWAY');
-    const retired = status.players.filter(p => p.status === 'RETIRED');
-    const fulfilled = status.players.filter(p => p.status === 'FULLFILLED');
+    const fixed = isFixedPartnerEvent(status);
     const nickNameMap = nickMap;
 
-    const renderPlayerGroup = (title, players, showActions) => {
-        if (!players.length) return '';
-        const sorted = sortPlayersByNickName(players, nickNameMap);
-        return `
-            <div class="player-group" data-group-key="${title.toLowerCase()}">
-                <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
-                <div class="player-group-content">
-                    ${sorted.map(p => `
-                        <div class="player-row">
-                            <div class="player-info">
-                                <div class="player-name">${getPlayerListDisplayName(p, nickNameMap, true)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
+    let playersSectionHtml = '';
+    if (fixed) {
+        const teams = getEventTeams(status);
+        const waitingTeams = teams.filter(t => t.status === 'WAITING');
+        const playingTeams = teams.filter(t => t.status === 'PLAYING');
+        const awayTeams = teams.filter(t => t.status === 'AWAY');
+        const retiredTeams = teams.filter(t => t.status === 'RETIRED');
+        const fulfilledTeams = teams.filter(t => (t.gamesPlayed || 0) >= (t.targetGames || 0) && t.status !== 'RETIRED');
+
+        const renderTeamGroup = (title, teamList, showActions) => {
+            if (!teamList.length) return '';
+            const sorted = [...teamList].sort((a, b) => formatTeamNames(a, status, nickNameMap, true).localeCompare(formatTeamNames(b, status, nickNameMap, true)));
+            return `
+                <div class="player-group" data-group-key="${title.toLowerCase()}">
+                    <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${teamList.length}) &#9662;</div>
+                    <div class="player-group-content">
+                        ${sorted.map(team => `
+                            <div class="player-row">
+                                <div class="player-info">
+                                    <div class="player-name">${getTeamListDisplayName(team, status, nickNameMap, true)}<span class="games-played-badge">${team.gamesPlayed || 0}</span></div>
+                                </div>
+                                ${showActions ? getPlayerActionButtons({ id: team.playerIds[0], status: team.status, gamesPlayed: team.gamesPlayed, targetGames: team.targetGames }) : ''}
                             </div>
-                            ${showActions ? getPlayerActionButtons(p) : ''}
-                        </div>
-                    `).join('')}
+                        `).join('')}
+                    </div>
                 </div>
-            </div>
+            `;
+        };
+
+        playersSectionHtml = `
+            ${renderTeamGroup('Waiting', waitingTeams, true)}
+            ${renderTeamGroup('Playing', playingTeams, false)}
+            ${renderTeamGroup('Fulfilled', fulfilledTeams, true)}
+            ${renderTeamGroup('Away', awayTeams, true)}
+            ${renderTeamGroup('Retired', retiredTeams, false)}
         `;
-    };
+    } else {
+        const waiting = status.players.filter(p => p.status === 'WAITING');
+        const playing = status.players.filter(p => p.status === 'PLAYING');
+        const away = status.players.filter(p => p.status === 'AWAY');
+        const retired = status.players.filter(p => p.status === 'RETIRED');
+        const fulfilled = status.players.filter(p => p.status === 'FULLFILLED');
+
+        const renderPlayerGroup = (title, players, showActions) => {
+            if (!players.length) return '';
+            const sorted = sortPlayersByNickName(players, nickNameMap);
+            return `
+                <div class="player-group" data-group-key="${title.toLowerCase()}">
+                    <div class="card-subtitle" style="font-weight:600; margin-bottom:4px; cursor:pointer;" onclick="togglePlayerGroup(this)">${title} (${players.length}) &#9662;</div>
+                    <div class="player-group-content">
+                        ${sorted.map(p => `
+                            <div class="player-row">
+                                <div class="player-info">
+                                    <div class="player-name">${getPlayerListDisplayName(p, nickNameMap, true)}<span class="games-played-badge">${p.gamesPlayed || 0}</span></div>
+                                </div>
+                                ${showActions ? getPlayerActionButtons(p) : ''}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        };
+
+        playersSectionHtml = `
+            ${renderPlayerGroup('Waiting', waiting, true)}
+            ${renderPlayerGroup('Playing', playing, false)}
+            ${renderPlayerGroup('Fulfilled', fulfilled, true)}
+            ${renderPlayerGroup('Away', away, true)}
+            ${renderPlayerGroup('Retired', retired, false)}
+        `;
+    }
+
+    const filterOptions = fixed
+        ? getEventTeams(status)
+            .slice()
+            .sort((a, b) => formatTeamNames(a, status, nickNameMap, true).localeCompare(formatTeamNames(b, status, nickNameMap, true)))
+            .map(team => `<option value="${team.id}" ${currentCompletedGamesFilter === team.id ? 'selected' : ''}>${escapeHtml(formatTeamNames(team, status, nickNameMap, true))}</option>`)
+            .join('')
+        : sortPlayersByNickName(status.players, nickNameMap)
+            .map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`)
+            .join('');
 
     return `
         <div class="card">
@@ -1655,15 +1791,11 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
 
         <div class="card">
             <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px; cursor:pointer;" id="players-toggle">Players &#9662;</div>
-                ${!status.isStarted ? `<button class="btn btn-primary btn-sm" id="add-players-btn">+ Add Players</button>` : ''}
+                <div class="card-title" style="font-size:16px; cursor:pointer;" id="players-toggle">${fixed ? 'Teams' : 'Players'} &#9662;</div>
+                ${!status.isStarted ? `<button class="btn btn-primary btn-sm" id="add-players-btn">${fixed ? '+ Add Team' : '+ Add Players'}</button>` : ''}
             </div>
             <div id="players-list" class="${status.isStarted ? 'players-section-collapsed' : ''}">
-                ${renderPlayerGroup('Waiting', waiting, true)}
-                ${renderPlayerGroup('Playing', playing, false)}
-                ${renderPlayerGroup('Fulfilled', fulfilled, true)}
-                ${renderPlayerGroup('Away', away, true)}
-                ${renderPlayerGroup('Retired', retired, false)}
+                ${playersSectionHtml}
             </div>
         </div>
 
@@ -1671,13 +1803,18 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             <div class="flex justify-between items-center mb-2">
                 <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
                 <select id="completed-games-player-filter" class="player-filter-select">
-                    <option value="">All Players</option>
-                    ${(() => sortPlayersByNickName(status.players, nickNameMap).map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`).join(''))()}
+                    <option value="">${fixed ? 'All Teams' : 'All Players'}</option>
+                    ${filterOptions}
                 </select>
             </div>
             <div id="completed-games-list">
                 ${completedGames.length ? completedGames.filter(g => {
                     if (!currentCompletedGamesFilter) return true;
+                    if (fixed) {
+                        const t1 = teamKeyFromPlayerIds(g.players.team1 || []);
+                        const t2 = teamKeyFromPlayerIds(g.players.team2 || []);
+                        return t1 === currentCompletedGamesFilter || t2 === currentCompletedGamesFilter;
+                    }
                     return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
                 }).map(g => {
                     const isEditing = editingCompletedScoreGameId === g.id;
@@ -1688,8 +1825,8 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     return `
                     <div class="game-card completed-game-card${isEditing ? ' is-editing-score' : ''}" data-game-id="${g.id}">
                         <div class="game-teams">
-                            <div class="game-team">Team 1: ${g.players.team1.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
-                            <div class="game-team">Team 2: ${g.players.team2.map(id => getGamePlayerDisplayName(id, status, buildNickNameMap(status.players))).join(', ')}</div>
+                            <div class="game-team">Team 1: ${fixed ? getTeamGamePlayerDisplayName(g.players.team1, status, nickNameMap) : g.players.team1.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
+                            <div class="game-team">Team 2: ${fixed ? getTeamGamePlayerDisplayName(g.players.team2, status, nickNameMap) : g.players.team2.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
                             <div class="game-status status-completed">Game #${g.gameNumber}</div>
                             <div class="game-meta">
                                 court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
@@ -1718,19 +1855,24 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
      `;
 }
 
-function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = false } = {}) {
+function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = false, labels = [], isTeamMatrix = false } = {}) {
     const playerMap = new Map(players.map(p => [p.id, p]));
     const nickNameMap = buildNickNameMap(players);
     const indexMap = new Map(playerIds.map((id, i) => [id, i]));
+    const labelMap = new Map(playerIds.map((id, i) => [id, labels[i] || id]));
 
-    // Always sort by nickname so compact and fullscreen matrix positions match
-    const order = [...playerIds].sort((a, b) => {
-        const nickA = nickNameMap.get(a) || '';
-        const nickB = nickNameMap.get(b) || '';
-        return nickA.localeCompare(nickB);
-    });
+    const order = isTeamMatrix
+        ? [...playerIds]
+        : [...playerIds].sort((a, b) => {
+            const nickA = nickNameMap.get(a) || '';
+            const nickB = nickNameMap.get(b) || '';
+            return nickA.localeCompare(nickB);
+        });
 
     const getLabel = (id) => {
+        if (isTeamMatrix) {
+            return labelMap.get(id) || id.slice(0, 8);
+        }
         const player = playerMap.get(id);
         if (useFullNames) {
             return player?.name || id.slice(0, 8);
@@ -1779,21 +1921,23 @@ function buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames = f
 }
 
 function renderPlayedWithCard(event) {
-    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+    const { playerIds, matrix, players, isTeamMatrix, labels } = computePlayedWithMatrix(event);
 
     if (playerIds.length === 0) {
         return '';
     }
 
+    const matrixTitle = isTeamMatrix ? 'Team Matchups' : 'Who Played with Who';
+
     return `
         <div class="card">
             <div class="played-with-header">
-                <div class="card-title" style="font-size:16px; cursor:pointer; margin:0; flex:1;" id="played-with-toggle">Who Played with Who &#9662;</div>
+                <div class="card-title" style="font-size:16px; cursor:pointer; margin:0; flex:1;" id="played-with-toggle">${matrixTitle} &#9662;</div>
                 <button type="button" class="btn btn-sm btn-secondary played-with-expand-btn" id="played-with-expand" title="Expand full screen" aria-label="Expand Who Played with Who">⛶</button>
             </div>
             <div id="played-with-list" class="played-with-collapsed">
                 <div class="played-with-matrix-container">
-                    ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: false })}
+                    ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: false, labels, isTeamMatrix })}
                 </div>
             </div>
         </div>
@@ -1834,8 +1978,10 @@ async function openPlayedWithFullscreen(event) {
     const existing = document.getElementById('played-with-fullscreen');
     if (existing) existing.remove();
 
-    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+    const { playerIds, matrix, players, isTeamMatrix } = computePlayedWithMatrix(event);
     if (playerIds.length === 0) return;
+
+    const matrixTitle = isTeamMatrix ? 'Team Matchups' : 'Who Played with Who';
 
     const overlay = document.createElement('div');
     overlay.id = 'played-with-fullscreen';
@@ -1843,12 +1989,12 @@ async function openPlayedWithFullscreen(event) {
     overlay.innerHTML = `
         <div class="played-with-fullscreen-panel">
             <div class="played-with-fullscreen-header">
-                <div class="played-with-fullscreen-title">Who Played with Who</div>
+                <div class="played-with-fullscreen-title">${matrixTitle}</div>
                 <button type="button" class="modal-close" id="played-with-fullscreen-close" aria-label="Close">&times;</button>
             </div>
             <div class="played-with-rotate-hint" id="played-with-rotate-hint" hidden>Rotate to landscape for the best view</div>
             <div class="played-with-matrix-container played-with-fullscreen-body">
-                ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: true })}
+                ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: true, labels, isTeamMatrix })}
             </div>
         </div>
     `;
@@ -1987,7 +2133,7 @@ function bindCollapsibleSections(eventId, status) {
             toggleId: 'played-with-toggle',
             collapsedClass: 'played-with-collapsed',
             storageKey: `gm_event_${eventId}_playedwith_collapsed`,
-            label: 'Who Played with Who',
+            label: isFixedPartnerEvent(status) ? 'Team Matchups' : 'Who Played with Who',
             defaultCollapsed: status.isStarted ? true : null,
         },
     ];
@@ -2050,6 +2196,44 @@ function randomValidScore() {
 }
 
 function computeLeaderboardStats(status, completedGames) {
+    const fixed = isFixedPartnerEvent(status);
+
+    if (fixed) {
+        const teams = getEventTeams(status);
+        const stats = {};
+        for (const team of teams) {
+            stats[team.id] = { wins: 0, scoreDiff: 0 };
+        }
+
+        for (const g of (completedGames || [])) {
+            if (!g.scores || g.scores.length < 2) continue;
+            const [score1, score2] = g.scores;
+            const team1Won = score1 > score2;
+            const team2Won = score2 > score1;
+            const t1 = teamKeyFromPlayerIds(g.players.team1 || []);
+            const t2 = teamKeyFromPlayerIds(g.players.team2 || []);
+            if (stats[t1]) {
+                if (team1Won) stats[t1].wins++;
+                stats[t1].scoreDiff += (score1 - score2);
+            }
+            if (stats[t2]) {
+                if (team2Won) stats[t2].wins++;
+                stats[t2].scoreDiff += (score2 - score1);
+            }
+        }
+
+        const sorted = teams.filter(t => (t.gamesPlayed || 0) > 0).sort((a, b) => {
+            const wa = stats[a.id]?.wins || 0;
+            const wb = stats[b.id]?.wins || 0;
+            if (wb !== wa) return wb - wa;
+            const da = stats[a.id]?.scoreDiff || 0;
+            const db = stats[b.id]?.scoreDiff || 0;
+            return db - da;
+        });
+
+        return { stats, sorted, isTeam: true };
+    }
+
     const stats = {};
     for (const p of (status.players || [])) {
         stats[p.id] = { wins: 0, scoreDiff: 0 };
@@ -2084,7 +2268,7 @@ function computeLeaderboardStats(status, completedGames) {
         return db - da;
     });
 
-    return { stats, sorted };
+    return { stats, sorted, isTeam: false };
 }
 
 function getMedalSvg(metal) {
@@ -2202,17 +2386,21 @@ function getLeaderboardRankBadge(idx) {
     return `<div class="leaderboard-rank">${idx + 1}</div>`;
 }
 
-function renderLeaderboardRow(p, idx, stats, nickNameMap, playerStatusMap) {
-    const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
+function renderLeaderboardRow(entry, idx, stats, nickNameMap, playerStatusMap, status, isTeam) {
+    const s = stats[entry.id] || { wins: 0, scoreDiff: 0 };
     const diffStr = s.scoreDiff > 0 ? `+${s.scoreDiff}` : `${s.scoreDiff}`;
-    const playerLabel = getPlayerDisplayName(p, nickNameMap, true, playerStatusMap);
-    const partnersStr = (p.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None';
+    const playerLabel = isTeam
+        ? getTeamListDisplayName(entry, status, nickNameMap, true)
+        : getPlayerDisplayName(entry, nickNameMap, true, playerStatusMap);
+    const meta = isTeam
+        ? `Games: ${entry.gamesPlayed || 0}`
+        : `Games: ${entry.gamesPlayed} | Partners: ${(entry.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None'}`;
     return `
         <div class="leaderboard-row">
             ${getLeaderboardRankBadge(idx)}
             <div class="leaderboard-player">
                 <div class="player-name">${playerLabel}</div>
-                <div class="player-meta">Games: ${p.gamesPlayed} | Partners: ${partnersStr}</div>
+                <div class="player-meta">${meta}</div>
             </div>
             <div class="leaderboard-stat">${s.wins} <span class="text-muted">wins</span></div>
             <div class="leaderboard-stat">${diffStr} <span class="text-muted">diff</span></div>
@@ -2221,13 +2409,15 @@ function renderLeaderboardRow(p, idx, stats, nickNameMap, playerStatusMap) {
 }
 
 function renderLeaderboard(status, completedGames) {
-    if (!status.players || !status.players.length) {
-        return '<div class="text-muted">No players yet</div>';
+    const fixed = isFixedPartnerEvent(status);
+    const hasEntries = fixed ? getEventTeams(status).length > 0 : (status.players || []).length > 0;
+    if (!hasEntries) {
+        return `<div class="text-muted">No ${fixed ? 'teams' : 'players'} yet</div>`;
     }
 
-    const { stats, sorted } = computeLeaderboardStats(status, completedGames);
+    const { stats, sorted, isTeam } = computeLeaderboardStats(status, completedGames);
     if (!sorted.length) {
-        return '<div class="text-muted">No players have played any games yet</div>';
+        return `<div class="text-muted">No ${fixed ? 'teams have' : 'players have'} played any games yet</div>`;
     }
 
     const nickNameMap = buildNickNameMap(status.players);
@@ -2235,8 +2425,8 @@ function renderLeaderboard(status, completedGames) {
     const top = sorted.slice(0, 3);
     const rest = sorted.slice(3);
 
-    const topHtml = top.map((p, idx) => renderLeaderboardRow(p, idx, stats, nickNameMap, playerStatusMap)).join('');
-    const restHtml = rest.map((p, idx) => renderLeaderboardRow(p, idx + 3, stats, nickNameMap, playerStatusMap)).join('');
+    const topHtml = top.map((entry, idx) => renderLeaderboardRow(entry, idx, stats, nickNameMap, playerStatusMap, status, isTeam)).join('');
+    const restHtml = rest.map((entry, idx) => renderLeaderboardRow(entry, idx + 3, stats, nickNameMap, playerStatusMap, status, isTeam)).join('');
 
     return `
         <div class="leaderboard">
@@ -2282,28 +2472,30 @@ function resolvePlayerNamePlain(playerId, players) {
 function buildLeaderBoardSheetRows(status, completedGames) {
     const players = status.players || [];
     const playerMap = new Map(players.map(p => [p.id, p]));
-    const { stats, sorted } = computeLeaderboardStats(status, completedGames);
+    const { stats, sorted, isTeam } = computeLeaderboardStats(status, completedGames);
     const header = excelRow([
         excelCell('Rank'),
-        excelCell('Player'),
+        excelCell(isTeam ? 'Team' : 'Player'),
         excelCell('Games'),
         excelCell('Wins'),
         excelCell('Score Diff'),
-        excelCell('Partners'),
+        excelCell(isTeam ? 'Opponents Faced' : 'Partners'),
     ]);
-    const rows = sorted.map((p, idx) => {
-        const s = stats[p.id] || { wins: 0, scoreDiff: 0 };
-        const partnersStr = (p.partnerIds || [])
-            .map(pid => playerMap.get(pid)?.name)
-            .filter(Boolean)
-            .join(', ') || 'None';
+    const rows = sorted.map((entry, idx) => {
+        const s = stats[entry.id] || { wins: 0, scoreDiff: 0 };
+        const label = isTeam
+            ? formatTeamNames(entry, status, buildNickNameMap(players), false)
+            : entry.name;
+        const extra = isTeam
+            ? String(s.wins)
+            : ((entry.partnerIds || []).map(pid => playerMap.get(pid)?.name).filter(Boolean).join(', ') || 'None');
         return excelRow([
             excelCell(idx + 1, 'Number'),
-            excelCell(p.name),
-            excelCell(p.gamesPlayed || 0, 'Number'),
+            excelCell(label),
+            excelCell(entry.gamesPlayed || 0, 'Number'),
             excelCell(s.wins, 'Number'),
             excelCell(s.scoreDiff, 'Number'),
-            excelCell(partnersStr),
+            excelCell(extra),
         ]);
     });
     return [header, ...rows];
@@ -2345,17 +2537,20 @@ function buildGameStatsSheetRows(status, completedGames) {
 }
 
 function buildPlayedWithSheetRows(event) {
-    const { playerIds, matrix, players } = computePlayedWithMatrix(event);
+    const { playerIds, matrix, players, isTeamMatrix, labels: teamLabels } = computePlayedWithMatrix(event);
     const playerMap = new Map(players.map(p => [p.id, p]));
 
-    // Reorder by full name for the spreadsheet (no nicknames)
-    const order = [...playerIds].sort((a, b) => {
-        const nameA = playerMap.get(a)?.name || '';
-        const nameB = playerMap.get(b)?.name || '';
-        return nameA.localeCompare(nameB);
-    });
+    const order = isTeamMatrix
+        ? [...playerIds]
+        : [...playerIds].sort((a, b) => {
+            const nameA = playerMap.get(a)?.name || '';
+            const nameB = playerMap.get(b)?.name || '';
+            return nameA.localeCompare(nameB);
+        });
     const indexMap = new Map(playerIds.map((id, i) => [id, i]));
-    const labels = order.map(id => playerMap.get(id)?.name || id.slice(0, 8));
+    const labels = isTeamMatrix
+        ? order.map(id => teamLabels[playerIds.indexOf(id)] || id.slice(0, 8))
+        : order.map(id => playerMap.get(id)?.name || id.slice(0, 8));
 
     const header = excelRow([
         excelCell(''),
@@ -2577,8 +2772,12 @@ function bindEventDetailActions(eventId, event, status) {
         const addBtn = document.getElementById('add-players-btn');
         if (addBtn) {
             addBtn.addEventListener('click', () => {
-                const currentIds = status.players.map(p => p.id);
-                openAddPlayersModal(eventId, new Set(currentIds));
+                if (isFixedPartnerEvent(status)) {
+                    openAddTeamsModal(eventId);
+                } else {
+                    const currentIds = status.players.map(p => p.id);
+                    openAddPlayersModal(eventId, new Set(currentIds));
+                }
             });
         }
 
@@ -2586,7 +2785,10 @@ function bindEventDetailActions(eventId, event, status) {
             btn.addEventListener('click', async (e) => {
                 e.stopPropagation();
                 const playerId = btn.dataset.playerId;
-                if (!confirm('Unregister this player from the event?')) return;
+                const confirmMsg = isFixedPartnerEvent(status)
+                    ? 'Unregister this team from the event?'
+                    : 'Unregister this player from the event?';
+                if (!confirm(confirmMsg)) return;
                 const restore = setButtonLoading(btn, 'Removing...');
                 const endFlight = beginActionFlight();
                 try {
@@ -3105,6 +3307,205 @@ function openAddPlayersModal(eventId, selectedIds) {
     });
 }
 
+function openAddTeamsModal(eventId) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Add Team</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="form-group">
+                <label>Player 1</label>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="text" id="team-player1-search" placeholder="Search players..." autocomplete="off" style="flex:1">
+                    <button type="button" id="team-player1-create-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;">+</button>
+                </div>
+                <div id="team-player1-list" class="team-player-picker-list text-muted" style="padding:8px;">Loading players...</div>
+                <div id="team-player1-pick" class="text-muted" style="margin-top:6px;font-size:12px;">No player selected</div>
+            </div>
+            <div class="form-group">
+                <label>Player 2</label>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <input type="text" id="team-player2-search" placeholder="Search players..." autocomplete="off" style="flex:1">
+                    <button type="button" id="team-player2-create-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;">+</button>
+                </div>
+                <div id="team-player2-list" class="team-player-picker-list text-muted" style="padding:8px;">Loading players...</div>
+                <div id="team-player2-pick" class="text-muted" style="margin-top:6px;font-size:12px;">No player selected</div>
+            </div>
+            <button type="button" class="btn btn-primary mt-2" id="confirm-add-team">Add Team</button>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    let allPlayers = [];
+    const registeredIds = new Set();
+    const picks = { player1: null, player2: null };
+
+    Promise.all([
+        api(`${API_BASE}/players/all`),
+        api(`${API_BASE}/events/${eventId}/status`),
+    ]).then(([players, status]) => {
+        allPlayers = players;
+        (status.players || []).forEach(p => registeredIds.add(p.id));
+        const refreshLists = () => {
+            setupTeamPlayerSlot(1, allPlayers, picks, overlay, registeredIds, refreshLists);
+            setupTeamPlayerSlot(2, allPlayers, picks, overlay, registeredIds, refreshLists);
+        };
+        refreshLists();
+    });
+
+    document.getElementById('confirm-add-team').addEventListener('click', async () => {
+        if (!picks.player1 || !picks.player2) {
+            showToast('Select both players for the team');
+            return;
+        }
+        if (picks.player1.id === picks.player2.id) {
+            showToast('A team cannot include the same player twice');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}/teams`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    player1_id: picks.player1.id,
+                    player2_id: picks.player2.id,
+                }),
+            });
+            overlay.remove();
+            showToast('Team added!');
+            loadEventDetail(eventId);
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+function setupTeamPlayerSlot(slotNum, allPlayers, picks, overlay, registeredIds, onPicksChanged) {
+    const searchInput = overlay.querySelector(`#team-player${slotNum}-search`);
+    const createBtn = overlay.querySelector(`#team-player${slotNum}-create-btn`);
+    const pickEl = overlay.querySelector(`#team-player${slotNum}-pick`);
+    const listEl = overlay.querySelector(`#team-player${slotNum}-list`);
+    const pickKey = slotNum === 1 ? 'player1' : 'player2';
+    const otherKey = slotNum === 1 ? 'player2' : 'player1';
+
+    if (!searchInput || !listEl) return;
+
+    function updatePickDisplay() {
+        const player = picks[pickKey];
+        pickEl.textContent = player ? `Selected: ${withDuprId(player.name, player)}` : 'No player selected';
+        pickEl.className = player ? 'text-success' : 'text-muted';
+    }
+
+    function playerMatchesQuery(player, query) {
+        if (!query) return true;
+        const q = query.toLowerCase();
+        return player.name.toLowerCase().includes(q) || (player.duprId && String(player.duprId).toLowerCase().includes(q));
+    }
+
+    function findExactPlayerMatch(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) return null;
+        return allPlayers.find(p =>
+            p.name.trim().toLowerCase() === q ||
+            (p.duprId && String(p.duprId).trim().toLowerCase() === q)
+        ) || null;
+    }
+
+    function selectPlayer(player) {
+        if (!player || registeredIds.has(player.id)) return;
+        if (picks[otherKey]?.id === player.id) return;
+        picks[pickKey] = player;
+        updatePickDisplay();
+        onPicksChanged?.();
+    }
+
+    function renderPlayerList() {
+        const query = searchInput.value.trim();
+        const otherPickId = picks[otherKey]?.id;
+        const available = allPlayers.filter(p => {
+            if (registeredIds.has(p.id)) return false;
+            if (p.id === otherPickId) return false;
+            return playerMatchesQuery(p, query);
+        });
+
+        createBtn.style.display = query && available.length === 0 ? '' : 'none';
+
+        if (!allPlayers.length) {
+            listEl.innerHTML = '<div class="text-muted" style="padding:4px 0;">No players yet. Type a name and press Enter or tap + to create one.</div>';
+            return;
+        }
+        if (!available.length) {
+            listEl.innerHTML = '<div class="text-muted" style="padding:4px 0;">No matching players. Press Enter or tap + to create a new one.</div>';
+            return;
+        }
+
+        listEl.innerHTML = available.map(p => {
+            const selected = picks[pickKey]?.id === p.id;
+            return `<button type="button" class="team-player-option${selected ? ' is-selected' : ''}" data-player-id="${p.id}">${escapeHtml(withDuprId(p.name, p))}</button>`;
+        }).join('');
+
+        listEl.querySelectorAll('.team-player-option').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const player = allPlayers.find(p => p.id === btn.dataset.playerId);
+                selectPlayer(player);
+            });
+        });
+    }
+
+    if (!searchInput.dataset.bound) {
+        searchInput.dataset.bound = '1';
+        searchInput.addEventListener('input', renderPlayerList);
+        searchInput.addEventListener('keydown', async (e) => {
+            if (e.key !== 'Enter') return;
+            e.preventDefault();
+            const query = searchInput.value.trim();
+            if (!query) return;
+            const existing = findExactPlayerMatch(query);
+            if (existing) {
+                selectPlayer(existing);
+                searchInput.value = '';
+                renderPlayerList();
+                return;
+            }
+            try {
+                const player = await api(`${API_BASE}/players`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name: query }),
+                });
+                allPlayers.push(player);
+                selectPlayer(player);
+                searchInput.value = '';
+                showToast(`Created and selected ${player.name}`);
+            } catch (err) {
+                showToast(err.message);
+            }
+        });
+
+        createBtn?.addEventListener('click', async () => {
+            const query = searchInput.value.trim();
+            if (!query) return;
+            try {
+                const player = await api(`${API_BASE}/players`, {
+                    method: 'POST',
+                    body: JSON.stringify({ name: query }),
+                });
+                allPlayers.push(player);
+                selectPlayer(player);
+                searchInput.value = '';
+            } catch (err) {
+                showToast(err.message);
+            }
+        });
+    }
+
+    updatePickDisplay();
+    renderPlayerList();
+}
+
 function renderPlayers() {
     app.innerHTML = `
         <div class="flex justify-between items-center mb-2">
@@ -3338,65 +3739,110 @@ function resolvePlayerName(playerId, status) {
 }
 
 function computePlayedWithMatrix(event) {
-      const players = event.players || [];
-      const gameHistory = event.gameHistory;
+    const players = event.players || [];
+    const gameHistory = event.gameHistory || [];
 
-      if (!players.length) {
-          return { playerIds: [], matrix: [], players: [] };
-      }
-  
-      const nickNameMap = buildNickNameMap(players);
-      
-      const playerIds = players.map(p => p.id);
-      const indexMap = new Map();
-      playerIds.forEach((id, idx) => indexMap.set(id, idx));
-  
-      const n = playerIds.length;
-      const matrix = Array.from({ length: n }, () => Array(n).fill(0));
-  
-      for (const game of gameHistory) {
-          const gamePlayers = [
-              ...(game.players?.team1 || []),
-              ...(game.players?.team2 || [])
-          ];
+    if (isFixedPartnerEvent(event)) {
+        const teams = event.teams || [];
+        if (!teams.length) {
+            return { playerIds: [], matrix: [], players: [], isTeamMatrix: true, labels: [] };
+        }
 
-          for (const p of gamePlayers) {
-              const idxP = indexMap.get(p);
-              if (idxP === undefined) continue;
-              for (const q of gamePlayers) {
-                  if (p === q) continue;
-                  const idxQ = indexMap.get(q);
-                  if (idxQ === undefined) continue;
-                  matrix[idxP][idxQ]++;
-              }
-          }
-      }
-  
-      // Sort playerIds by nickname and reorder matrix
-      const sortedPlayerIds = [...playerIds].sort((a, b) => {
-          const nickA = nickNameMap.get(a) || '';
-          const nickB = nickNameMap.get(b) || '';
-          return nickA.localeCompare(nickB);
-      });
-  
-      const sortedIndexMap = new Map();
-      sortedPlayerIds.forEach((id, idx) => sortedIndexMap.set(id, idx));
-  
-      const sortedMatrix = Array.from({ length: n }, () => Array(n).fill(0));
-      for (let i = 0; i < n; i++) {
-          for (let j = 0; j < n; j++) {
-              const origIdI = playerIds[i];
-              const origIdJ = playerIds[j];
-              const newI = sortedIndexMap.get(origIdI);
-              const newJ = sortedIndexMap.get(origIdJ);
-              if (newI !== undefined && newJ !== undefined) {
-                  sortedMatrix[newI][newJ] = matrix[i][j];
-              }
-          }
-      }
-  
-      return { playerIds: sortedPlayerIds, matrix: sortedMatrix, players };
-  }
+        const teamIds = teams.map(t => t.id);
+        const labelMap = new Map(teams.map(t => [t.id, formatTeamNames(t, { players }, buildNickNameMap(players), false)]));
+        const indexMap = new Map(teamIds.map((id, idx) => [id, idx]));
+        const n = teamIds.length;
+        const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+
+        for (const game of gameHistory) {
+            if ((game.players?.team1 || []).length !== 2 || (game.players?.team2 || []).length !== 2) continue;
+            const t1 = teamKeyFromPlayerIds(game.players.team1);
+            const t2 = teamKeyFromPlayerIds(game.players.team2);
+            const i = indexMap.get(t1);
+            const j = indexMap.get(t2);
+            if (i === undefined || j === undefined) continue;
+            matrix[i][j]++;
+            matrix[j][i]++;
+        }
+
+        const sortedTeamIds = [...teamIds].sort((a, b) => (labelMap.get(a) || '').localeCompare(labelMap.get(b) || ''));
+        const sortedIndexMap = new Map(sortedTeamIds.map((id, idx) => [id, idx]));
+        const sortedMatrix = Array.from({ length: n }, () => Array(n).fill(0));
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                const origI = teamIds[i];
+                const origJ = teamIds[j];
+                const newI = sortedIndexMap.get(origI);
+                const newJ = sortedIndexMap.get(origJ);
+                if (newI !== undefined && newJ !== undefined) {
+                    sortedMatrix[newI][newJ] = matrix[i][j];
+                }
+            }
+        }
+
+        return {
+            playerIds: sortedTeamIds,
+            matrix: sortedMatrix,
+            players,
+            isTeamMatrix: true,
+            labels: sortedTeamIds.map(id => labelMap.get(id) || id),
+        };
+    }
+
+    if (!players.length) {
+        return { playerIds: [], matrix: [], players: [], isTeamMatrix: false, labels: [] };
+    }
+
+    const nickNameMap = buildNickNameMap(players);
+    const playerIds = players.map(p => p.id);
+    const indexMap = new Map();
+    playerIds.forEach((id, idx) => indexMap.set(id, idx));
+
+    const n = playerIds.length;
+    const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+
+    for (const game of gameHistory) {
+        const gamePlayers = [
+            ...(game.players?.team1 || []),
+            ...(game.players?.team2 || [])
+        ];
+
+        for (const p of gamePlayers) {
+            const idxP = indexMap.get(p);
+            if (idxP === undefined) continue;
+            for (const q of gamePlayers) {
+                if (p === q) continue;
+                const idxQ = indexMap.get(q);
+                if (idxQ === undefined) continue;
+                matrix[idxP][idxQ]++;
+            }
+        }
+    }
+
+    const sortedPlayerIds = [...playerIds].sort((a, b) => {
+        const nickA = nickNameMap.get(a) || '';
+        const nickB = nickNameMap.get(b) || '';
+        return nickA.localeCompare(nickB);
+    });
+
+    const sortedIndexMap = new Map();
+    sortedPlayerIds.forEach((id, idx) => sortedIndexMap.set(id, idx));
+
+    const sortedMatrix = Array.from({ length: n }, () => Array(n).fill(0));
+    for (let i = 0; i < n; i++) {
+        for (let j = 0; j < n; j++) {
+            const origIdI = playerIds[i];
+            const origIdJ = playerIds[j];
+            const newI = sortedIndexMap.get(origIdI);
+            const newJ = sortedIndexMap.get(origIdJ);
+            if (newI !== undefined && newJ !== undefined) {
+                sortedMatrix[newI][newJ] = matrix[i][j];
+            }
+        }
+    }
+
+    return { playerIds: sortedPlayerIds, matrix: sortedMatrix, players, isTeamMatrix: false, labels: [] };
+}
 
 function openManualAllotModal(eventId, courtId) {
     const overlay = document.createElement('div');
@@ -3407,33 +3853,8 @@ function openManualAllotModal(eventId, courtId) {
                 <div class="modal-title">Manual Allotment - Court ${courtId}</div>
                 <button class="modal-close">&times;</button>
             </div>
-            <div class="manual-allot-form">
-                <div class="team-section">
-                    <div class="team-title">Team 1</div>
-                    <div class="form-group">
-                        <label>Player 1</label>
-                        <select class="manual-allot-select" data-team="1" data-slot="0"></select>
-                    </div>
-                    <div class="form-group">
-                        <label>Player 2 (optional)</label>
-                        <select class="manual-allot-select partner-select" data-team="1" data-slot="1"></select>
-                    </div>
-                </div>
-                <div class="team-divider"></div>
-                <div class="team-section">
-                    <div class="team-title">Team 2</div>
-                    <div class="form-group">
-                        <label>Player 1</label>
-                        <select class="manual-allot-select" data-team="2" data-slot="0"></select>
-                    </div>
-                    <div class="form-group">
-                        <label>Player 2 (optional)</label>
-                        <select class="manual-allot-select partner-select" data-team="2" data-slot="1"></select>
-                    </div>
-                </div>
-                <div id="manual-allot-error" class="manual-allot-error" style="display:none;"></div>
-                <button type="button" class="btn btn-success" id="confirm-manual-allot">Confirm Allotment</button>
-                <button type="button" class="btn btn-secondary mt-1" id="cancel-manual-allot">Cancel</button>
+            <div class="manual-allot-form" id="manual-allot-form-body">
+                <div class="text-muted">Loading...</div>
             </div>
         </div>
     `;
@@ -3445,6 +3866,84 @@ function openManualAllotModal(eventId, courtId) {
     let currentCourtId = courtId;
 
     api(`${API_BASE}/events/${eventId}/status`).then(status => {
+        const formBody = overlay.querySelector('#manual-allot-form-body');
+        const fixed = isFixedPartnerEvent(status);
+
+        if (fixed) {
+            formBody.innerHTML = `
+                <div class="team-section">
+                    <div class="team-title">Team 1</div>
+                    <div class="form-group">
+                        <label>Select Team</label>
+                        <select class="manual-allot-team-select" data-side="1"></select>
+                    </div>
+                </div>
+                <div class="team-divider"></div>
+                <div class="team-section">
+                    <div class="team-title">Team 2</div>
+                    <div class="form-group">
+                        <label>Select Team</label>
+                        <select class="manual-allot-team-select" data-side="2"></select>
+                    </div>
+                </div>
+                <div id="manual-allot-error" class="manual-allot-error" style="display:none;"></div>
+                <button type="button" class="btn btn-success" id="confirm-manual-allot">Confirm Allotment</button>
+                <button type="button" class="btn btn-secondary mt-1" id="cancel-manual-allot">Cancel</button>
+            `;
+
+            const waitingTeams = getEventTeams(status).filter(t => t.status === 'WAITING');
+            const nickNameMap = buildNickNameMap(status.players);
+            const teamSelects = overlay.querySelectorAll('.manual-allot-team-select');
+
+            function renderTeamOptions() {
+                const selected = new Set(Array.from(teamSelects).map(s => s.value).filter(Boolean));
+                teamSelects.forEach(select => {
+                    const current = select.value;
+                    const options = waitingTeams
+                        .filter(team => !selected.has(team.id) || team.id === current)
+                        .map(team => {
+                            const label = formatTeamNames(team, status, nickNameMap, true);
+                            return `<option value="${team.id}" ${team.id === current ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+                        })
+                        .join('');
+                    select.innerHTML = '<option value="">-- Select Team --</option>' + options;
+                });
+            }
+
+            renderTeamOptions();
+            teamSelects.forEach(select => select.addEventListener('change', renderTeamOptions));
+            return;
+        }
+
+        formBody.innerHTML = `
+            <div class="team-section">
+                <div class="team-title">Team 1</div>
+                <div class="form-group">
+                    <label>Player 1</label>
+                    <select class="manual-allot-select" data-team="1" data-slot="0"></select>
+                </div>
+                <div class="form-group">
+                    <label>Player 2 (optional)</label>
+                    <select class="manual-allot-select partner-select" data-team="1" data-slot="1"></select>
+                </div>
+            </div>
+            <div class="team-divider"></div>
+            <div class="team-section">
+                <div class="team-title">Team 2</div>
+                <div class="form-group">
+                    <label>Player 1</label>
+                    <select class="manual-allot-select" data-team="2" data-slot="0"></select>
+                </div>
+                <div class="form-group">
+                    <label>Player 2 (optional)</label>
+                    <select class="manual-allot-select partner-select" data-team="2" data-slot="1"></select>
+                </div>
+            </div>
+            <div id="manual-allot-error" class="manual-allot-error" style="display:none;"></div>
+            <button type="button" class="btn btn-success" id="confirm-manual-allot">Confirm Allotment</button>
+            <button type="button" class="btn btn-secondary mt-1" id="cancel-manual-allot">Cancel</button>
+        `;
+
         const waiting = status.players.filter(p => p.status === 'WAITING');
         const nickNameMap = buildNickNameMap(status.players);
         const selects = overlay.querySelectorAll('.manual-allot-select');
@@ -3496,27 +3995,52 @@ function openManualAllotModal(eventId, courtId) {
         });
     });
 
-    document.getElementById('cancel-manual-allot').addEventListener('click', () => overlay.remove());
-
-    document.getElementById('confirm-manual-allot').addEventListener('click', async () => {
-        const selects = overlay.querySelectorAll('.manual-allot-select');
-        const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
-        const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
-
-        const team1 = team1Slots.map(s => s.value).filter(Boolean);
-        const team2 = team2Slots.map(s => s.value).filter(Boolean);
-
-        const errorEl = document.getElementById('manual-allot-error');
-        const missing = [];
-        if (team1.length + team2.length < 1) missing.push('Select at least 1 player');
-        if (new Set([...team1, ...team2]).size !== team1.length + team2.length) missing.push('All players must be distinct');
-
-        if (missing.length) {
-            errorEl.textContent = missing.join(', ');
-            errorEl.style.display = 'block';
+    overlay.addEventListener('click', async (e) => {
+        if (e.target.id === 'cancel-manual-allot') {
+            overlay.remove();
             return;
         }
-        errorEl.style.display = 'none';
+        if (e.target.id !== 'confirm-manual-allot') return;
+
+        const errorEl = overlay.querySelector('#manual-allot-error');
+        let team1 = [];
+        let team2 = [];
+
+        const teamSelectEls = overlay.querySelectorAll('.manual-allot-team-select');
+        if (teamSelectEls.length) {
+            const status = await api(`${API_BASE}/events/${currentEventId}/status`);
+            const team1Id = overlay.querySelector('.manual-allot-team-select[data-side="1"]')?.value;
+            const team2Id = overlay.querySelector('.manual-allot-team-select[data-side="2"]')?.value;
+            const teams = getEventTeams(status);
+            const t1 = teams.find(t => t.id === team1Id);
+            const t2 = teams.find(t => t.id === team2Id);
+            if (!t1 || !t2 || team1Id === team2Id) {
+                if (errorEl) {
+                    errorEl.textContent = 'Select two different teams';
+                    errorEl.style.display = 'block';
+                }
+                return;
+            }
+            team1 = [...t1.playerIds];
+            team2 = [...t2.playerIds];
+        } else {
+            const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
+            const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
+            team1 = team1Slots.map(s => s?.value).filter(Boolean);
+            team2 = team2Slots.map(s => s?.value).filter(Boolean);
+            const missing = [];
+            if (team1.length + team2.length < 1) missing.push('Select at least 1 player');
+            if (new Set([...team1, ...team2]).size !== team1.length + team2.length) missing.push('All players must be distinct');
+            if (missing.length) {
+                if (errorEl) {
+                    errorEl.textContent = missing.join(', ');
+                    errorEl.style.display = 'block';
+                }
+                return;
+            }
+        }
+
+        if (errorEl) errorEl.style.display = 'none';
 
         try {
             const res = await api(`${API_BASE}/events/${currentEventId}/courts/${currentCourtId}/allot-manual`, {
@@ -3531,8 +4055,10 @@ function openManualAllotModal(eventId, courtId) {
             overlay.remove();
             loadEventDetail(currentEventId);
         } catch (err) {
-            errorEl.textContent = err.message;
-            errorEl.style.display = 'block';
+            if (errorEl) {
+                errorEl.textContent = err.message;
+                errorEl.style.display = 'block';
+            }
         }
     });
 }

@@ -1,5 +1,6 @@
 import { Database } from '../storage/Database';
 import { SchedulingService } from '../services/SchedulingService';
+import { isValidGameScore } from '../utils/scoreValidation';
 
 const DEFAULT_OWNER = 'test-owner-0000-0000-0000-000000000000';
 
@@ -317,6 +318,119 @@ describe('Pickleball Event Scheduler Validation', () => {
     }
     
     expect(event.gameHistory.length).toBe(gamesScheduled);
+  });
+});
+
+describe('Score validation', () => {
+  it('should accept 11-10 as a golden-point win', () => {
+    expect(isValidGameScore(11, 10)).toBe(true);
+    expect(isValidGameScore(10, 11)).toBe(true);
+  });
+
+  it('should reject scores below 11 and one-point margins other than 11-10', () => {
+    expect(isValidGameScore(10, 9)).toBe(false);
+    expect(isValidGameScore(12, 11)).toBe(false);
+    expect(isValidGameScore(15, 14)).toBe(false);
+  });
+
+  it('should accept standard win-by-2 scores at 11+', () => {
+    expect(isValidGameScore(11, 7)).toBe(true);
+    expect(isValidGameScore(12, 10)).toBe(true);
+  });
+});
+
+describe('Fixed Partner Doubles', () => {
+  let db: Database;
+  let scheduler: SchedulingService;
+
+  beforeEach(async () => {
+    db = Database.getInstance();
+    await db.clear();
+    scheduler = new SchedulingService();
+  });
+
+  async function createFixedEventWithTeams(teamCount: number) {
+    const event = await db.createEvent('Fixed Event', 6, 2, DEFAULT_OWNER, 'FIXED_PARTNER_DOUBLES');
+    const players = [];
+    for (let i = 1; i <= teamCount * 2; i++) {
+      players.push(await db.createPlayer(`Player ${i}`, DEFAULT_OWNER));
+    }
+    for (let i = 0; i < players.length; i += 2) {
+      event.addTeam(players[i], players[i + 1]);
+    }
+    return { event, players };
+  }
+
+  it('should block start until at least 2 teams are registered', async () => {
+    const event = await db.createEvent('Fixed', 6, 2, DEFAULT_OWNER, 'FIXED_PARTNER_DOUBLES');
+    const player = await db.createPlayer('Player 1', DEFAULT_OWNER);
+    event.addTeam(player, await db.createPlayer('Player 2', DEFAULT_OWNER));
+    expect(event.validateCanStart().ok).toBe(false);
+
+    const p3 = await db.createPlayer('Player 3', DEFAULT_OWNER);
+    const p4 = await db.createPlayer('Player 4', DEFAULT_OWNER);
+    event.addTeam(p3, p4);
+    expect(event.validateCanStart().ok).toBe(true);
+  });
+
+  it('should always place registered partners on the same side during auto allot', async () => {
+    const { event, players } = await createFixedEventWithTeams(2);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.game).toBeDefined();
+
+    const [a, b] = [players[0].id, players[1].id];
+    const [c, d] = [players[2].id, players[3].id];
+    const team1 = result.game!.players.team1;
+    const team2 = result.game!.players.team2;
+
+    const sameSide = (pair: string[], side: string[]) =>
+      (side.includes(pair[0]) && side.includes(pair[1]));
+
+    expect(sameSide([a, b], team1) || sameSide([a, b], team2)).toBe(true);
+    expect(sameSide([c, d], team1) || sameSide([c, d], team2)).toBe(true);
+  });
+
+  it('should sync AWAY status to both partners', async () => {
+    const { event, players } = await createFixedEventWithTeams(2);
+    event.start();
+    event.setTeamStatus(players[0].id, 'AWAY');
+
+    const regA = event.getRegistration(players[0].id)!;
+    const regB = event.getRegistration(players[1].id)!;
+    expect(regA.status).toBe('AWAY');
+    expect(regB.status).toBe('AWAY');
+  });
+
+  it('should end a game with an 11-10 golden-point score', async () => {
+    const { event, players } = await createFixedEventWithTeams(2);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 10];
+    scheduler.startGame(event.id, result.game!.id);
+    const ended = scheduler.endGame(event.id, result.game!.id);
+    expect(ended.success).toBe(true);
+    expect(event.gameHistory.length).toBe(1);
+    expect(event.getRegistration(players[0].id)!.gamesPlayedCount).toBe(1);
+  });
+
+  it('should keep partner games played counts in sync after a game', async () => {
+    const { event, players } = await createFixedEventWithTeams(2);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 5];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    for (const player of players) {
+      expect(event.getRegistration(player.id)!.gamesPlayedCount).toBe(1);
+    }
   });
 });
 

@@ -72,7 +72,16 @@ class MockClient {
       return { id: args[0], name: args[1], nick_name: args[2], owner_id: args[3], dupr_id: args[4] ?? null };
     }
     if (table === 'events') {
-      return { id: args[0], name: args[1], courts: args[2], totalGamesToPlay: args[3], startedAt: args[4] };
+      return {
+        id: args[0],
+        name: args[1],
+        courts: args[2],
+        totalGamesToPlay: args[3],
+        startedAt: args[4],
+        endedAt: args[5],
+        owner_id: args[6],
+        format: args[7] ?? 'ROTATING_DOUBLES',
+      };
     }
     if (table === 'registrations') {
       return {
@@ -84,6 +93,7 @@ class MockClient {
         partners: JSON.parse(args[5] || '[]'),
         priority: args[6],
         nick_name: args[7] ?? null,
+        fixed_partner_id: args[8] ?? null,
       };
     }
     if (table === 'games') {

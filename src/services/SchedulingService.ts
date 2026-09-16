@@ -1,7 +1,8 @@
 import { Database } from '../storage/Database';
-import { Event } from '../models/Event';
+import { Event, teamKey, type EventTeam } from '../models/Event';
 import { Game, createGame } from '../models/Game';
 import { Player } from '../models/Player';
+import { isValidGameScore } from '../utils/scoreValidation';
 
 export interface ScheduleResult {
   success: boolean;
@@ -47,7 +48,116 @@ export class SchedulingService {
     return reg.priority;
   }
 
+  private getAvailableFixedTeams(event: Event): EventTeam[] {
+    const teams: EventTeam[] = [];
+    for (const team of event.getTeams()) {
+      const [a, b] = team.playerIds;
+      const regA = event.getRegistration(a);
+      const regB = event.getRegistration(b);
+      if (!regA || !regB) continue;
+      if (regA.status !== 'WAITING' || regB.status !== 'WAITING') continue;
+      if (this.getPlayerPriority(a, event) <= 0 || this.getPlayerPriority(b, event) <= 0) continue;
+      teams.push(team);
+    }
+    return teams.sort((t1, t2) => {
+      if (t1.gamesPlayed !== t2.gamesPlayed) return t1.gamesPlayed - t2.gamesPlayed;
+      return t2.priority - t1.priority;
+    });
+  }
+
+  private matchupKey(teamA: string[], teamB: string[]): string {
+    const k1 = teamKey(teamA[0], teamA[1]);
+    const k2 = teamKey(teamB[0], teamB[1]);
+    return k1 < k2 ? `${k1}::${k2}` : `${k2}::${k1}`;
+  }
+
+  private buildTeamRematchCounts(event: Event): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const game of event.gameHistory) {
+      if (game.players.team1.length !== 2 || game.players.team2.length !== 2) continue;
+      const key = this.matchupKey(game.players.team1, game.players.team2);
+      counts.set(key, (counts.get(key) || 0) + 1);
+    }
+    return counts;
+  }
+
+  private findBestFixedMatchup(availableTeams: EventTeam[], event: Event): ScoredAssignment | null {
+    if (availableTeams.length < 2) return null;
+
+    const rematches = this.buildTeamRematchCounts(event);
+    let best: ScoredAssignment | null = null;
+
+    for (let i = 0; i < availableTeams.length; i++) {
+      for (let j = i + 1; j < availableTeams.length; j++) {
+        const team1 = [...availableTeams[i].playerIds];
+        const team2 = [...availableTeams[j].playerIds];
+        const rematchCount = rematches.get(this.matchupKey(team1, team2)) || 0;
+        const gamesPlayedSum = availableTeams[i].gamesPlayed + availableTeams[j].gamesPlayed;
+        const prioritySum = availableTeams[i].priority + availableTeams[j].priority;
+        const scored: ScoredAssignment = {
+          team1,
+          team2,
+          partnerRepeats: rematchCount > 0 ? 1 : 0,
+          matrixCost: rematchCount,
+          maxCoPlay: rematchCount,
+          zeroPairs: rematchCount === 0 ? 1 : 0,
+          prioritySum,
+          gamesPlayedSum,
+        };
+        if (!best || this.compareFixedAssignments(scored, best) < 0) {
+          best = scored;
+        }
+      }
+    }
+
+    return best;
+  }
+
+  private compareFixedAssignments(a: ScoredAssignment, b: ScoredAssignment): number {
+    if (a.matrixCost !== b.matrixCost) return a.matrixCost - b.matrixCost;
+    if (a.prioritySum !== b.prioritySum) return b.prioritySum - a.prioritySum;
+    if (a.gamesPlayedSum !== b.gamesPlayedSum) return a.gamesPlayedSum - b.gamesPlayedSum;
+    return 0;
+  }
+
+  private buildFixedWarning(best: ScoredAssignment): string | undefined {
+    if (best.matrixCost <= 0) return undefined;
+    return `Best available matchup used — these teams have already faced each other ${best.matrixCost} time(s)`;
+  }
+
+  private commitFixedAssignment(
+    event: Event,
+    eventId: string,
+    courtId: number,
+    assignment: ScoredAssignment
+  ): ScheduleResult {
+    const game = createGame(eventId, courtId, assignment.team1, assignment.team2);
+    const warning = this.buildFixedWarning(assignment);
+    if (warning) game.allotmentWarning = warning;
+    for (const pid of [...assignment.team1, ...assignment.team2]) {
+      event.updateRegistration(pid, { status: 'PLAYING' });
+      const mateId = event.getTeamMate(pid);
+      if (mateId) {
+        event.updateRegistration(mateId, { status: 'PLAYING' });
+      }
+    }
+    event.games.push(game);
+    return { success: true, game, warning };
+  }
+
   getAvailablePlayers(event: Event) {
+    if (event.isFixedPartnerDoubles()) {
+      const teams = this.getAvailableFixedTeams(event);
+      const players: Player[] = [];
+      for (const team of teams) {
+        for (const pid of team.playerIds) {
+          const player = event.getPlayer(pid);
+          if (player) players.push(player);
+        }
+      }
+      return players;
+    }
+
     const allPlayers = Array.from(event.players.values());
     return allPlayers
       .filter(p => {
@@ -357,6 +467,18 @@ export class SchedulingService {
       }
     }
 
+    if (event.isFixedPartnerDoubles()) {
+      const availableTeams = this.getAvailableFixedTeams(event);
+      if (availableTeams.length < 2) {
+        return { success: false, reason: 'No teams available to play next game yet', blockingConstraints: ['Need at least 2 waiting teams'], shouldWait: true };
+      }
+      const best = this.findBestFixedMatchup(availableTeams, event);
+      if (!best) {
+        return { success: false, reason: 'Unable to pair waiting teams', blockingConstraints: ['Try releasing some teams from AWAY/RETIRED'], shouldWait: true };
+      }
+      return this.commitFixedAssignment(event, eventId, courtId, best);
+    }
+
     if (available.length < 3) {
       return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Insufficient available players'], shouldWait: true };
     }
@@ -419,6 +541,28 @@ export class SchedulingService {
     }
 
     const totalSelected = team1.length + team2.length;
+
+    if (event.isFixedPartnerDoubles()) {
+      if (totalSelected >= 4) {
+        if (!event.isRegisteredPair(team1) || !event.isRegisteredPair(team2)) {
+          return { success: false, reason: 'Each side must be a registered fixed partner team', blockingConstraints: ['Invalid team pairing'] };
+        }
+        const rematchCount = this.buildTeamRematchCounts(event).get(this.matchupKey(team1, team2)) || 0;
+        const assignment: ScoredAssignment = {
+          team1: [...team1],
+          team2: [...team2],
+          partnerRepeats: rematchCount > 0 ? 1 : 0,
+          matrixCost: rematchCount,
+          maxCoPlay: rematchCount,
+          zeroPairs: rematchCount === 0 ? 1 : 0,
+          prioritySum: 0,
+          gamesPlayedSum: 0,
+        };
+        return this.commitFixedAssignment(event, eventId, courtId, assignment);
+      }
+      return { success: false, reason: 'Select two complete teams for manual allotment', blockingConstraints: ['Need 2 fixed teams (4 players)'], shouldWait: true };
+    }
+
     if (totalSelected >= 4) {
       const coPlay = this.buildCoPlayCounts(event);
       const scored = this.scoreAssignment(team1, team2, event, coPlay);
@@ -450,9 +594,11 @@ export class SchedulingService {
 
     const allPlayerIds = [...game.players.team1, ...game.players.team2];
     for (const pid of allPlayerIds) {
-      const reg = event.getRegistration(pid);
-      if (reg) {
-        reg.status = 'WAITING';
+      if (event.isFixedPartnerDoubles()) {
+        event.setTeamStatus(pid, 'WAITING');
+      } else {
+        const reg = event.getRegistration(pid);
+        if (reg) reg.status = 'WAITING';
       }
     }
 
@@ -469,11 +615,24 @@ export class SchedulingService {
     if (game.started) return { success: false, reason: 'Game has already started' };
     if (game.players.team1.length !== 2 || game.players.team2.length !== 2) {
       for (const pid of [...game.players.team1, ...game.players.team2]) {
-        const reg = event.getRegistration(pid);
-        if (reg) reg.status = 'WAITING';
+        if (event.isFixedPartnerDoubles()) {
+          event.setTeamStatus(pid, 'WAITING');
+        } else {
+          const reg = event.getRegistration(pid);
+          if (reg) reg.status = 'WAITING';
+        }
       }
       event.games = event.games.filter(g => g.id !== gameId);
       return { success: false, reason: 'Both teams must have exactly 2 players to start the game', blockingConstraints: ['Team size must be 2v2'] };
+    }
+    if (event.isFixedPartnerDoubles()) {
+      if (!event.isRegisteredPair(game.players.team1) || !event.isRegisteredPair(game.players.team2)) {
+        for (const pid of [...game.players.team1, ...game.players.team2]) {
+          event.setTeamStatus(pid, 'WAITING');
+        }
+        event.games = event.games.filter(g => g.id !== gameId);
+        return { success: false, reason: 'Each side must be a registered fixed partner team', blockingConstraints: ['Invalid team pairing'] };
+      }
     }
     game.gameNumber = event.nextGameNumber++;
     game.started = true;
@@ -497,8 +656,12 @@ export class SchedulingService {
     }
 
     const [team1, team2] = game.scores;
-    if ((team1 < 11 && team2 < 11) || Math.abs(team1 - team2) < 2) {
-      return { success: false, reason: 'Invalid score: one team must reach at least 11 and win by 2', blockingConstraints: ['Score validation failed'] };
+    if (!isValidGameScore(team1, team2)) {
+      return {
+        success: false,
+        reason: 'Invalid score: one team must reach 11 and win by 2 (11-10 golden point is allowed)',
+        blockingConstraints: ['Score validation failed'],
+      };
     }
 
     game.completed = true;
@@ -508,19 +671,36 @@ export class SchedulingService {
 
     const allPlayerIds = [...game.players.team1, ...game.players.team2];
     const team1Ids = new Set(game.players.team1);
+    const processedTeams = new Set<string>();
+
     for (const playerId of allPlayerIds) {
       const reg = event.getRegistration(playerId);
-      if (reg) {
-        reg.gamesPlayedCount++;
-        if (reg.gamesPlayedCount >= reg.targetGames) {
-          reg.status = 'AWAY';
-        } else {
-          reg.status = 'WAITING';
-        }
-        const teammate = allPlayerIds.find(pid => pid !== playerId && team1Ids.has(pid) === team1Ids.has(playerId));
-        if (teammate && !reg.partners.includes(teammate)) {
-          reg.partners.push(teammate);
-        }
+      if (!reg) continue;
+
+      if (event.isFixedPartnerDoubles()) {
+        const mateId = event.getTeamMate(playerId);
+        const teamId = mateId ? teamKey(playerId, mateId) : playerId;
+        if (processedTeams.has(teamId)) continue;
+        processedTeams.add(teamId);
+
+        const newCount = reg.gamesPlayedCount + 1;
+        const newStatus = newCount >= reg.targetGames ? 'AWAY' : 'WAITING';
+        event.syncTeamRegistration(playerId, {
+          gamesPlayedCount: newCount,
+          status: newStatus,
+        });
+        continue;
+      }
+
+      reg.gamesPlayedCount++;
+      if (reg.gamesPlayedCount >= reg.targetGames) {
+        reg.status = 'AWAY';
+      } else {
+        reg.status = 'WAITING';
+      }
+      const teammate = allPlayerIds.find(pid => pid !== playerId && team1Ids.has(pid) === team1Ids.has(playerId));
+      if (teammate && !reg.partners.includes(teammate)) {
+        reg.partners.push(teammate);
       }
     }
 
@@ -536,7 +716,11 @@ export class SchedulingService {
     for (const pid of justFinishedIds) {
       const reg = event.getRegistration(pid);
       if (reg && reg.status === 'WAITING') {
-        reg.priority = 5;
+        if (event.isFixedPartnerDoubles()) {
+          event.syncTeamRegistration(pid, { priority: 5 });
+        } else {
+          reg.priority = 5;
+        }
       }
     }
     const newPlayerCount = event.getAvailablePlayers().filter(p => this.getPlayerPriority(p.id, event) === 10).length;
@@ -548,7 +732,11 @@ export class SchedulingService {
         if (!wasBackToBack.has(pid)) {
           const reg = event.getRegistration(pid);
           if (reg && reg.status === 'WAITING') {
-            reg.priority = 7;
+            if (event.isFixedPartnerDoubles()) {
+              event.syncTeamRegistration(pid, { priority: 7 });
+            } else {
+              reg.priority = 7;
+            }
             promoted++;
             promotedIds.add(pid);
             if (promoted >= promoteCount) break;
@@ -560,7 +748,11 @@ export class SchedulingService {
           if (promotedIds.has(pid)) continue;
           const reg = event.getRegistration(pid);
           if (reg && reg.status === 'WAITING') {
-            reg.priority = 7;
+            if (event.isFixedPartnerDoubles()) {
+              event.syncTeamRegistration(pid, { priority: 7 });
+            } else {
+              reg.priority = 7;
+            }
             promoted++;
             if (promoted >= promoteCount) break;
           }
