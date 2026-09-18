@@ -305,6 +305,67 @@ export class Event {
     });
   }
 
+  /**
+   * Update operational event parameters before the event is ended.
+   * Court count cannot drop below a court that still has an active game.
+   */
+  updateParameters(params: { courts?: number; totalGamesToPlay?: number }): { ok: boolean; error?: string } {
+    if (this.isEnded()) {
+      return { ok: false, error: 'Cannot edit event parameters after the event has ended' };
+    }
+
+    if (params.courts !== undefined) {
+      if (!Number.isInteger(params.courts) || params.courts < 1) {
+        return { ok: false, error: 'Court count must be at least 1' };
+      }
+      const blockingCourts = [...new Set(
+        this.games
+          .filter(g => !g.completed && g.courtId > params.courts!)
+          .map(g => g.courtId)
+      )].sort((a, b) => a - b);
+      if (blockingCourts.length > 0) {
+        const label = blockingCourts.length === 1 ? 'court' : 'courts';
+        return {
+          ok: false,
+          error: `Cannot reduce courts while games are active on ${label} ${blockingCourts.join(', ')}`,
+        };
+      }
+      this.courts = params.courts;
+    }
+
+    if (params.totalGamesToPlay !== undefined) {
+      if (!Number.isInteger(params.totalGamesToPlay) || params.totalGamesToPlay < 1) {
+        return { ok: false, error: 'Allowed number of games must be at least 1' };
+      }
+      this.applyTargetGamesChange(params.totalGamesToPlay);
+    }
+
+    return { ok: true };
+  }
+
+  private applyTargetGamesChange(newTarget: number): void {
+    const oldTarget = this.totalGamesToPlay;
+    this.totalGamesToPlay = newTarget;
+
+    for (const reg of this.registrations.values()) {
+      if (reg.status === 'RETIRED') continue;
+
+      const wasFulfilled = reg.gamesPlayedCount >= oldTarget || reg.status === 'FULLFILLED';
+      this.updateRegistration(reg.playerId, { targetGames: newTarget });
+      const updated = this.registrations.get(reg.playerId);
+      if (!updated) continue;
+      if (updated.status === 'PLAYING' || updated.status === 'UNAVAILABLE') continue;
+
+      if (updated.gamesPlayedCount >= newTarget) {
+        if (updated.status === 'WAITING' || updated.status === 'FULLFILLED') {
+          updated.status = 'AWAY';
+        }
+      } else if (wasFulfilled && (updated.status === 'AWAY' || updated.status === 'FULLFILLED')) {
+        updated.status = 'WAITING';
+      }
+    }
+  }
+
   getAvailablePlayers(): Player[] {
     if (this.isFixedPartnerDoubles()) {
       const teams = this.getTeams().filter(t => t.status === 'WAITING');

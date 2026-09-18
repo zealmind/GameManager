@@ -10,6 +10,21 @@ const db = Database.getInstance();
 
 const VALID_EVENT_FORMATS: EventFormat[] = ['ROTATING_DOUBLES', 'FIXED_PARTNER_DOUBLES', 'SINGLES_ROUND_ROBIN'];
 
+function isOwnerOrModerator(event: any, req: any): boolean {
+  const user = req.user as { id: string } | undefined;
+  const shareAccess = req.shareAccess as ShareAccess | undefined;
+  if (user && event.ownerId === user.id) return true;
+  if (shareAccess && shareAccess.eventId === event.id && shareAccess.permission === 'moderator') return true;
+  return false;
+}
+
+function parsePositiveInt(value: unknown): number | undefined | 'invalid' {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = typeof value === 'number' ? value : Number.parseInt(String(value), 10);
+  if (!Number.isInteger(n) || n < 1) return 'invalid';
+  return n;
+}
+
 function prepareEventResponse(event: Event) {
   const ev = event as any;
   return {
@@ -120,18 +135,61 @@ router.delete('/:eventId/share', authenticate, async (req: AuthenticatedRequest,
   }
 });
 
-// PATCH /events/:eventId - Rename an event (owner only)
-router.patch('/:eventId', authenticate, async (req: AuthenticatedRequest, res) => {
+// PATCH /events/:eventId - Update name (owner) and/or courts & games-per-player (owner or moderator) before End Event
+router.patch('/:eventId', withEventAccess as any, loadEvent as any, async (req: any, res: any) => {
   try {
-    const event = await requireEventOwner(req, res);
-    if (!event) return;
+    const event = req.event as Event;
+    const user = req.user as { id: string } | undefined;
+    const isOwner = !!(user && (event as any).ownerId === user.id);
+    const isModerator = isOwnerOrModerator(event, req);
 
-    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
-    if (!name) {
-      return res.status(400).json({ error: 'Missing required field: name' });
+    if (!isOwner && !isModerator) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
 
-    event.name = name;
+    const hasName = Object.prototype.hasOwnProperty.call(req.body || {}, 'name');
+    const hasCourts = Object.prototype.hasOwnProperty.call(req.body || {}, 'courts')
+      || Object.prototype.hasOwnProperty.call(req.body || {}, 'numCourts');
+    const hasGames = Object.prototype.hasOwnProperty.call(req.body || {}, 'totalGamesToPlay');
+
+    if (!hasName && !hasCourts && !hasGames) {
+      return res.status(400).json({ error: 'No updatable fields provided' });
+    }
+
+    if (hasName) {
+      if (!isOwner) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+      const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+      if (!name) {
+        return res.status(400).json({ error: 'Missing required field: name' });
+      }
+      event.name = name;
+    }
+
+    const paramUpdate: { courts?: number; totalGamesToPlay?: number } = {};
+    if (hasCourts) {
+      const courts = parsePositiveInt(req.body?.courts ?? req.body?.numCourts);
+      if (courts === undefined || courts === 'invalid') {
+        return res.status(400).json({ error: 'Court count must be at least 1' });
+      }
+      paramUpdate.courts = courts;
+    }
+    if (hasGames) {
+      const totalGamesToPlay = parsePositiveInt(req.body?.totalGamesToPlay);
+      if (totalGamesToPlay === undefined || totalGamesToPlay === 'invalid') {
+        return res.status(400).json({ error: 'Allowed number of games must be at least 1' });
+      }
+      paramUpdate.totalGamesToPlay = totalGamesToPlay;
+    }
+
+    if (paramUpdate.courts !== undefined || paramUpdate.totalGamesToPlay !== undefined) {
+      const result = event.updateParameters(paramUpdate);
+      if (!result.ok) {
+        return res.status(400).json({ error: result.error });
+      }
+    }
+
     await db.persistEvent(event.id);
     res.json(prepareEventResponse(event));
   } catch (err) {

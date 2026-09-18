@@ -632,5 +632,82 @@ describe('Singles Round Robin', () => {
       expect(event.getRegistration(pid)!.consecutiveGamesPlayed).toBe(1);
     }
   });
+
+  it('should allow editing courts and games-per-player before the event ends', async () => {
+    const event = await db.createEvent('Settings Event', 6, 2, DEFAULT_OWNER);
+    const players = [];
+    for (let i = 1; i <= 4; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+
+    expect(event.updateParameters({ courts: 3, totalGamesToPlay: 8 }).ok).toBe(true);
+    expect(event.courts).toBe(3);
+    expect(event.totalGamesToPlay).toBe(8);
+    expect(event.getRegistration(players[0].id)!.targetGames).toBe(8);
+
+    event.start();
+    expect(event.updateParameters({ courts: 4 }).ok).toBe(true);
+    expect(event.courts).toBe(4);
+  });
+
+  it('should reject court reductions while a higher court still has an active game', async () => {
+    const event = await db.createEvent('Busy Courts', 6, 3, DEFAULT_OWNER);
+    event.games.push({
+      id: 'active-court-3',
+      eventId: event.id,
+      gameNumber: 1,
+      courtId: 3,
+      players: { team1: ['a', 'b'], team2: ['c', 'd'] },
+      createdAt: new Date(),
+      completed: false,
+      started: true,
+    } as any);
+
+    const result = event.updateParameters({ courts: 2 });
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/court 3/i);
+    expect(event.courts).toBe(3);
+  });
+
+  it('should reopen fulfilled players when the games-per-player target increases', async () => {
+    const event = await db.createEvent('Raise Target', 4, 2, DEFAULT_OWNER);
+    const player = await db.createPlayer('Player 1', DEFAULT_OWNER);
+    event.addPlayer(player);
+    const reg = event.getRegistration(player.id)!;
+    reg.gamesPlayedCount = 4;
+    reg.targetGames = 4;
+    reg.status = 'AWAY';
+
+    expect(event.updateParameters({ totalGamesToPlay: 6 }).ok).toBe(true);
+    const updated = event.getRegistration(player.id)!;
+    expect(updated.targetGames).toBe(6);
+    expect(updated.status).toBe('WAITING');
+  });
+
+  it('should not reopen players who stepped away before hitting the old target', async () => {
+    const event = await db.createEvent('Stay Away', 6, 2, DEFAULT_OWNER);
+    const player = await db.createPlayer('Player 1', DEFAULT_OWNER);
+    event.addPlayer(player);
+    const reg = event.getRegistration(player.id)!;
+    reg.gamesPlayedCount = 2;
+    reg.targetGames = 6;
+    reg.status = 'AWAY';
+
+    expect(event.updateParameters({ totalGamesToPlay: 8 }).ok).toBe(true);
+    const updated = event.getRegistration(player.id)!;
+    expect(updated.targetGames).toBe(8);
+    expect(updated.status).toBe('AWAY');
+  });
+
+  it('should not allow parameter edits after the event has ended', async () => {
+    const event = await db.createEvent('Ended Event', 6, 2, DEFAULT_OWNER);
+    event.endedAt = new Date();
+    const result = event.updateParameters({ courts: 4, totalGamesToPlay: 10 });
+    expect(result.ok).toBe(false);
+    expect(event.courts).toBe(2);
+    expect(event.totalGamesToPlay).toBe(6);
+  });
 });
 

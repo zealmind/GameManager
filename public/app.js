@@ -1141,7 +1141,9 @@ async function loadEventsList() {
                     ? `<span class="delete-link unshare-btn" data-event-id="${e.id}">Unshare</span> `
                     : '';
                 actionHtml = `
-                    <span class="delete-link rename-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Rename</span>
+                    ${e.endedAt
+                        ? `<span class="delete-link rename-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Rename</span>`
+                        : `<span class="delete-link edit-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}" data-event-courts="${e.courts || 0}" data-event-games="${e.totalGamesToPlay}" data-event-format="${e.format || 'ROTATING_DOUBLES'}" data-event-owner="${e.ownerId || ''}">Edit</span>`}
                     <span class="delete-link copy-event-btn" data-event-id="${e.id}" data-event-name="${escapeHtml(e.name)}">Copy</span>
                     ${unshare}<span class="delete-link delete-event-btn" data-event-id="${e.id}">Delete</span>`;
             } else {
@@ -1167,6 +1169,19 @@ async function loadEventsList() {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 openRenameEventModal(btn.dataset.eventId, btn.dataset.eventName || '');
+            });
+        });
+        container.querySelectorAll('.edit-event-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                openEditEventSettingsModal({
+                    id: btn.dataset.eventId,
+                    name: btn.dataset.eventName || '',
+                    courts: parseInt(btn.dataset.eventCourts, 10) || 1,
+                    totalGamesToPlay: parseInt(btn.dataset.eventGames, 10) || 1,
+                    format: btn.dataset.eventFormat || 'ROTATING_DOUBLES',
+                    ownerId: btn.dataset.eventOwner || '',
+                }, { onSaved: () => loadEventsList() });
             });
         });
         container.querySelectorAll('.copy-event-btn').forEach(btn => {
@@ -1298,6 +1313,102 @@ function openCreateEventModal() {
     });
 }
 
+function gamesPerPlayerLabel(format) {
+    return format === 'FIXED_PARTNER_DOUBLES'
+        ? 'Allowed number of Games per team'
+        : 'Allowed number of Games per player';
+}
+
+function canEditEventSettings(event, status) {
+    if (status?.isEnded || event?.endedAt) return false;
+    if (accessMode === 'viewer') return false;
+    if (accessMode === 'moderator') return true;
+    return !!(currentUser && event?.ownerId === currentUser.id);
+}
+
+function openEditEventSettingsModal(event, { onSaved } = {}) {
+    const isOwner = !!(currentUser && event.ownerId === currentUser.id);
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';
+    overlay.innerHTML = `
+        <div class="modal">
+            <div class="modal-header">
+                <div class="modal-title">Edit Event</div>
+                <button class="modal-close">&times;</button>
+            </div>
+            <form id="edit-event-form">
+                ${isOwner ? `
+                <div class="form-group">
+                    <label>Event Name</label>
+                    <input type="text" name="name" required value="${escapeHtml(event.name || '')}">
+                </div>` : ''}
+                <div class="form-group">
+                    <label>Event Format</label>
+                    <input type="text" value="${escapeHtml(getEventFormatLabel(event))}" disabled>
+                </div>
+                <div class="form-group">
+                    <label>${gamesPerPlayerLabel(event.format)}</label>
+                    <input type="number" name="totalGamesToPlay" required min="1" value="${event.totalGamesToPlay || 1}">
+                </div>
+                <div class="form-group">
+                    <label>Number of Courts</label>
+                    <input type="number" name="numCourts" required min="1" value="${event.courts || 1}">
+                </div>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+    overlay.querySelector('.modal-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    const firstInput = overlay.querySelector('input:not([disabled])');
+    if (firstInput) {
+        firstInput.focus();
+        if (firstInput.type === 'text') firstInput.select();
+    }
+    document.getElementById('edit-event-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = new FormData(e.target);
+        const body = {};
+        if (isOwner) {
+            const name = (fd.get('name') || '').trim();
+            if (!name) {
+                showToast('Event Name is required');
+                return;
+            }
+            body.name = name;
+        }
+        const totalGamesToPlay = parseInt(fd.get('totalGamesToPlay'), 10);
+        const numCourts = parseInt(fd.get('numCourts'), 10);
+        if (!totalGamesToPlay || totalGamesToPlay < 1) {
+            showToast(event.format === 'FIXED_PARTNER_DOUBLES'
+                ? 'Allowed Games per Team must be at least 1'
+                : 'Allowed Games per Player must be at least 1');
+            return;
+        }
+        if (!numCourts || numCourts < 1) {
+            showToast('Court Count must be at least 1');
+            return;
+        }
+        body.totalGamesToPlay = totalGamesToPlay;
+        body.numCourts = numCourts;
+        const submitBtn = overlay.querySelector('button[type="submit"]');
+        const restore = setButtonLoading(submitBtn, 'Saving...');
+        try {
+            await api(`${API_BASE}/events/${event.id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(body)
+            });
+            overlay.remove();
+            showToast('Event updated');
+            if (onSaved) onSaved();
+        } catch (err) {
+            restore();
+            showToast(err.message);
+        }
+    });
+}
+
 function openRenameEventModal(eventId, currentName) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay active';
@@ -1407,7 +1518,7 @@ async function openEventDetail(eventId, fromShare = false) {
             ${showBackButton()}
             <div style="flex:1; min-width:0;">
                 <h1 id="event-title" style="font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Event Detail</h1>
-                <div id="event-status" class="card-subtitle" style="font-size:11px;"></div>
+                <div id="event-status" class="card-subtitle" style="font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
             </div>
             ${fromShare ? `<div class="shared-badge">Shared</div>` : ''}
             ${accessMode === 'viewer' ? '<div class="shared-badge" style="background:#6b7280;">Viewing</div>' : ''}
@@ -1453,6 +1564,7 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
             players: status.players || [],
             teams: status.teams || [],
             startedAt: status.startedAt,
+            endedAt: status.endedAt,
         };
 
         const container = document.getElementById('event-detail');
@@ -1471,10 +1583,13 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
         const statusEl = document.getElementById('event-status');
         if (titleEl) titleEl.textContent = event.name;
         if (statusEl) {
-            let statusText = 'Registration Phase';
-            if (status.isStarted && !status.isEnded) statusText = 'In Progress';
-            else if (status.isEnded) statusText = 'Ended';
-            statusEl.textContent = statusText;
+            let phaseText = 'Registration';
+            if (status.isStarted && !status.isEnded) phaseText = 'In Progress';
+            else if (status.isEnded) phaseText = 'Ended';
+            const gamesLabel = isFixedPartnerEvent(event)
+                ? `${event.totalGamesToPlay} games/team`
+                : `${event.totalGamesToPlay} games/player`;
+            statusEl.textContent = `${phaseText} · ${getEventFormatLabel(event)} · ${gamesLabel} · ${event.courts || 0} courts`;
         }
 
         let phaseHtml = '';
@@ -1523,8 +1638,15 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
         bindPlayedWithExpand(event);
 
         const actionsEl = document.getElementById('event-actions');
-        if (actionsEl && event.ownerId === (currentUser?.id || '')) {
-            actionsEl.innerHTML = `
+        if (actionsEl) {
+            const settingsBtn = canEditEventSettings(event, status) ? `
+                <button type="button" class="action-icon-btn" id="edit-event-settings-action" title="Edit event" aria-label="Edit event">
+                    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09A1.65 1.65 0 0 0 15 4.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>` : '';
+            const ownerBtns = event.ownerId === (currentUser?.id || '') ? `
                 <button type="button" class="action-icon-btn" id="share-view-btn" title="Share" aria-label="Share">
                     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
@@ -1547,8 +1669,11 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
                         <polyline points="7 10 12 15 17 10"/>
                         <line x1="12" y1="15" x2="12" y2="3"/>
                     </svg>
-                </button>
-            `;
+                </button>` : '';
+            actionsEl.innerHTML = `${settingsBtn}${ownerBtns}`;
+            document.getElementById('edit-event-settings-action')?.addEventListener('click', () => {
+                openEditEventSettingsModal(event, { onSaved: () => loadEventDetail(eventId) });
+            });
             document.getElementById('share-view-btn')?.addEventListener('click', () => openShareModal(eventId, 'viewer'));
             document.getElementById('share-moderate-btn')?.addEventListener('click', () => openShareModal(eventId, 'moderator'));
             document.getElementById('download-excel-btn')?.addEventListener('click', () => {
@@ -1599,14 +1724,6 @@ function renderRegistrationPhase(event, status) {
                 <div class="status-chip">
                     <div class="status-value">${registeredCount}</div>
                     <div class="status-label">${fixed ? 'Teams' : 'Registered'}</div>
-                </div>
-                <div class="status-chip">
-                    <div class="status-value">${event.totalGamesToPlay}</div>
-                    <div class="status-label">Target Games</div>
-                </div>
-                <div class="status-chip">
-                    <div class="status-value">${event.courts || 0}</div>
-                    <div class="status-label">Courts</div>
                 </div>
             </div>
         </div>
