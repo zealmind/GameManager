@@ -322,6 +322,39 @@ body.hide-bottom-nav .bottom-nav {
     color: var(--text-secondary);
 }
 
+.players-toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+    align-items: stretch;
+}
+
+.players-search-input,
+.players-sort-select {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 16px;
+    background: var(--card-bg);
+}
+
+.players-search-input {
+    flex: 1;
+    min-width: 0;
+}
+
+.players-sort-select {
+    flex: 0 0 auto;
+    width: auto;
+    max-width: 46%;
+}
+
+.players-search-input:focus,
+.players-sort-select:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
 /* Forms */
 .form-group {
     margin-bottom: 12px;
@@ -670,13 +703,99 @@ body.hide-bottom-nav .bottom-nav {
     accent-color: var(--primary);
 }
 
+.team-pair-hint {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 10px;
+}
+
+.team-pair-preview {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 8px;
+    align-items: stretch;
+    margin-bottom: 12px;
+}
+
+.team-pair-amp {
+    align-self: center;
+    color: var(--text-secondary);
+    font-weight: 700;
+    font-size: 14px;
+}
+
+.team-pair-slot {
+    position: relative;
+    display: block;
+    width: 100%;
+    text-align: left;
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    padding: 10px 28px 10px 10px;
+    min-height: 58px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+}
+
+.team-pair-slot.is-filled {
+    border-style: solid;
+    border-color: var(--primary);
+    background: var(--card-bg);
+    cursor: default;
+}
+
+.team-pair-slot-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 2px;
+}
+
+.team-pair-slot-name {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.25;
+    word-break: break-word;
+}
+
+.team-pair-slot-clear {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+.team-pair-slot-clear:hover {
+    background: var(--bg);
+    color: var(--text);
+}
+
+.team-player-empty {
+    padding: 10px;
+    font-size: 13px;
+}
+
 .team-player-picker-list {
     max-height: 160px;
     overflow-y: auto;
     margin-top: 8px;
     border: 1px solid var(--border);
     border-radius: 8px;
-    background: var(--surface);
+    background: var(--bg);
+}
+
+.team-player-picker-list--single {
+    max-height: 240px;
+    margin-top: 0;
 }
 
 .team-player-option {

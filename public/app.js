@@ -3535,25 +3535,17 @@ function openAddTeamsModal(eventId) {
                 <div class="modal-title">Add Team</div>
                 <button class="modal-close">&times;</button>
             </div>
+            <p class="team-pair-hint">Search once, then tap two players to form a pair.</p>
+            <div class="team-pair-preview" id="team-pair-preview"></div>
             <div class="form-group">
-                <label>Player 1</label>
+                <label>Find a player</label>
                 <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="text" id="team-player1-search" placeholder="Search players..." autocomplete="off" style="flex:1">
-                    <button type="button" id="team-player1-create-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;">+</button>
+                    <input type="text" id="team-player-search" placeholder="Search name or DUPR ID" autocomplete="off" style="flex:1">
+                    <button type="button" id="team-player-create-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;font-size:1.2rem;line-height:1;padding:4px 10px;">+</button>
                 </div>
-                <div id="team-player1-list" class="team-player-picker-list text-muted" style="padding:8px;">Loading players...</div>
-                <div id="team-player1-pick" class="text-muted" style="margin-top:6px;font-size:12px;">No player selected</div>
             </div>
-            <div class="form-group">
-                <label>Player 2</label>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <input type="text" id="team-player2-search" placeholder="Search players..." autocomplete="off" style="flex:1">
-                    <button type="button" id="team-player2-create-btn" class="btn btn-secondary btn-sm" title="Create new player" style="display:none;flex-shrink:0;">+</button>
-                </div>
-                <div id="team-player2-list" class="team-player-picker-list text-muted" style="padding:8px;">Loading players...</div>
-                <div id="team-player2-pick" class="text-muted" style="margin-top:6px;font-size:12px;">No player selected</div>
-            </div>
-            <button type="button" class="btn btn-primary mt-2" id="confirm-add-team">Add Team</button>
+            <div id="team-player-list" class="team-player-picker-list team-player-picker-list--single text-muted">Loading players...</div>
+            <button type="button" class="btn btn-primary mt-2" id="confirm-add-team" disabled>Add Team</button>
         </div>
     `;
     document.body.appendChild(overlay);
@@ -3562,62 +3554,12 @@ function openAddTeamsModal(eventId) {
 
     let allPlayers = [];
     const registeredIds = new Set();
-    const picks = { player1: null, player2: null };
-
-    Promise.all([
-        api(`${API_BASE}/players/all`),
-        api(`${API_BASE}/events/${eventId}/status`),
-    ]).then(([players, status]) => {
-        allPlayers = players;
-        (status.players || []).forEach(p => registeredIds.add(p.id));
-        const refreshLists = () => {
-            setupTeamPlayerSlot(1, allPlayers, picks, overlay, registeredIds, refreshLists);
-            setupTeamPlayerSlot(2, allPlayers, picks, overlay, registeredIds, refreshLists);
-        };
-        refreshLists();
-    });
-
-    document.getElementById('confirm-add-team').addEventListener('click', async () => {
-        if (!picks.player1 || !picks.player2) {
-            showToast('Select both players for the team');
-            return;
-        }
-        if (picks.player1.id === picks.player2.id) {
-            showToast('A team cannot include the same player twice');
-            return;
-        }
-        try {
-            await api(`${API_BASE}/events/${eventId}/teams`, {
-                method: 'POST',
-                body: JSON.stringify({
-                    player1_id: picks.player1.id,
-                    player2_id: picks.player2.id,
-                }),
-            });
-            overlay.remove();
-            showToast('Team added!');
-            loadEventDetail(eventId);
-        } catch (err) {
-            showToast(err.message);
-        }
-    });
-}
-
-function setupTeamPlayerSlot(slotNum, allPlayers, picks, overlay, registeredIds, onPicksChanged) {
-    const searchInput = overlay.querySelector(`#team-player${slotNum}-search`);
-    const createBtn = overlay.querySelector(`#team-player${slotNum}-create-btn`);
-    const pickEl = overlay.querySelector(`#team-player${slotNum}-pick`);
-    const listEl = overlay.querySelector(`#team-player${slotNum}-list`);
-    const pickKey = slotNum === 1 ? 'player1' : 'player2';
-    const otherKey = slotNum === 1 ? 'player2' : 'player1';
-
-    if (!searchInput || !listEl) return;
-
-    function updatePickDisplay() {
-        const player = picks[pickKey];
-        pickEl.textContent = player ? `Selected: ${withDuprId(player.name, player)}` : 'No player selected';
-        pickEl.className = player ? 'text-success' : 'text-muted';
-    }
+    const picks = [null, null];
+    const searchInput = overlay.querySelector('#team-player-search');
+    const createBtn = overlay.querySelector('#team-player-create-btn');
+    const listEl = overlay.querySelector('#team-player-list');
+    const previewEl = overlay.querySelector('#team-pair-preview');
+    const confirmBtn = overlay.querySelector('#confirm-add-team');
 
     function playerMatchesQuery(player, query) {
         if (!query) return true;
@@ -3634,39 +3576,67 @@ function setupTeamPlayerSlot(slotNum, allPlayers, picks, overlay, registeredIds,
         ) || null;
     }
 
-    function selectPlayer(player) {
-        if (!player || registeredIds.has(player.id)) return;
-        if (picks[otherKey]?.id === player.id) return;
-        picks[pickKey] = player;
-        updatePickDisplay();
-        onPicksChanged?.();
+    function selectedIds() {
+        return new Set(picks.filter(Boolean).map(p => p.id));
+    }
+
+    function renderSlots() {
+        previewEl.innerHTML = [0, 1].map(i => {
+            const player = picks[i];
+            if (!player) {
+                return `
+                    <button type="button" class="team-pair-slot" data-slot="${i}">
+                        <div class="team-pair-slot-label">Player ${i + 1}</div>
+                        <div class="team-pair-slot-name text-muted">Waiting…</div>
+                    </button>`;
+            }
+            return `
+                <div class="team-pair-slot is-filled">
+                    <div class="team-pair-slot-label">Player ${i + 1}</div>
+                    <div class="team-pair-slot-name">${escapeHtml(withDuprId(player.name, player))}</div>
+                    <button type="button" class="team-pair-slot-clear" data-clear-slot="${i}" aria-label="Remove player ${i + 1}">&times;</button>
+                </div>`;
+        }).join('<div class="team-pair-amp" aria-hidden="true">&amp;</div>');
+        previewEl.querySelectorAll('[data-clear-slot]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                picks[Number(btn.dataset.clearSlot)] = null;
+                renderAll();
+                searchInput.focus();
+            });
+        });
+        previewEl.querySelectorAll('.team-pair-slot[data-slot]').forEach(btn => {
+            btn.addEventListener('click', () => searchInput.focus());
+        });
+        confirmBtn.disabled = !(picks[0] && picks[1]);
     }
 
     function renderPlayerList() {
         const query = searchInput.value.trim();
-        const otherPickId = picks[otherKey]?.id;
-        const available = allPlayers.filter(p => {
-            if (registeredIds.has(p.id)) return false;
-            if (p.id === otherPickId) return false;
-            return playerMatchesQuery(p, query);
-        });
+        const taken = selectedIds();
+        const available = allPlayers
+            .filter(p => !registeredIds.has(p.id) && !taken.has(p.id) && playerMatchesQuery(p, query))
+            .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
 
-        createBtn.style.display = query && available.length === 0 ? '' : 'none';
+        createBtn.style.display = query && available.length === 0 && !findExactPlayerMatch(query) ? '' : 'none';
 
         if (!allPlayers.length) {
-            listEl.innerHTML = '<div class="text-muted" style="padding:4px 0;">No players yet. Type a name and press Enter or tap + to create one.</div>';
+            listEl.innerHTML = '<div class="team-player-empty">No players yet. Type a name and press Enter or tap <strong>+</strong> to create one.</div>';
             return;
         }
         if (!available.length) {
-            listEl.innerHTML = '<div class="text-muted" style="padding:4px 0;">No matching players. Press Enter or tap + to create a new one.</div>';
+            const emptyMsg = query
+                ? 'No matching players. Press Enter or tap <strong>+</strong> to create a new one.'
+                : (taken.size === 2
+                    ? 'Pair is full. Remove a player above to change it.'
+                    : 'No available players. Everyone is already on a team.');
+            listEl.innerHTML = `<div class="team-player-empty">${emptyMsg}</div>`;
             return;
         }
 
-        listEl.innerHTML = available.map(p => {
-            const selected = picks[pickKey]?.id === p.id;
-            return `<button type="button" class="team-player-option${selected ? ' is-selected' : ''}" data-player-id="${p.id}">${escapeHtml(withDuprId(p.name, p))}</button>`;
-        }).join('');
-
+        listEl.innerHTML = available.map(p =>
+            `<button type="button" class="team-player-option" data-player-id="${p.id}">${escapeHtml(withDuprId(p.name, p))}</button>`
+        ).join('');
         listEl.querySelectorAll('.team-player-option').forEach(btn => {
             btn.addEventListener('click', () => {
                 const player = allPlayers.find(p => p.id === btn.dataset.playerId);
@@ -3675,54 +3645,162 @@ function setupTeamPlayerSlot(slotNum, allPlayers, picks, overlay, registeredIds,
         });
     }
 
-    if (!searchInput.dataset.bound) {
-        searchInput.dataset.bound = '1';
-        searchInput.addEventListener('input', renderPlayerList);
-        searchInput.addEventListener('keydown', async (e) => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            const query = searchInput.value.trim();
-            if (!query) return;
-            const existing = findExactPlayerMatch(query);
-            if (existing) {
-                selectPlayer(existing);
-                searchInput.value = '';
-                renderPlayerList();
-                return;
-            }
-            try {
-                const player = await api(`${API_BASE}/players`, {
-                    method: 'POST',
-                    body: JSON.stringify({ name: query }),
-                });
-                allPlayers.push(player);
-                selectPlayer(player);
-                searchInput.value = '';
-                showToast(`Created and selected ${player.name}`);
-            } catch (err) {
-                showToast(err.message);
-            }
-        });
+    function renderAll() {
+        renderSlots();
+        renderPlayerList();
+    }
 
-        createBtn?.addEventListener('click', async () => {
-            const query = searchInput.value.trim();
-            if (!query) return;
+    function selectPlayer(player) {
+        if (!player || registeredIds.has(player.id) || selectedIds().has(player.id)) return;
+        const emptyIndex = picks.findIndex(p => !p);
+        if (emptyIndex === -1) {
+            showToast('Remove a player from the pair first');
+            return;
+        }
+        picks[emptyIndex] = player;
+        searchInput.value = '';
+        renderAll();
+    }
+
+    function openCreatePlayerDialog() {
+        const prefill = searchInput.value.trim();
+        const dlg = document.createElement('div');
+        dlg.className = 'modal-overlay active';
+        dlg.style.zIndex = '1100';
+        dlg.innerHTML = `
+            <div class="modal">
+                <div class="modal-header">
+                    <div class="modal-title">Create New Player</div>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <form id="team-create-player-form">
+                    <div class="form-group">
+                        <label>Player Name</label>
+                        <input type="text" name="name" required placeholder="Enter player name" value="${escapeHtml(prefill)}">
+                    </div>
+                    <div class="form-group">
+                        <label>DUPR ID <span class="text-muted">(optional)</span></label>
+                        <input type="text" name="duprId" placeholder="e.g. 1234567890" autocomplete="off">
+                    </div>
+                    <p id="team-create-player-error" class="auth-error hidden"></p>
+                    <button type="submit" class="btn btn-primary">Create &amp; Add to Pair</button>
+                </form>
+            </div>
+        `;
+        document.body.appendChild(dlg);
+        dlg.querySelector('.modal-close').addEventListener('click', () => dlg.remove());
+        dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.remove(); });
+        const nameInput = dlg.querySelector('input[name="name"]');
+        nameInput.focus();
+        nameInput.setSelectionRange(nameInput.value.length, nameInput.value.length);
+        const errorEl = dlg.querySelector('#team-create-player-error');
+        dlg.querySelector('#team-create-player-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            errorEl.classList.add('hidden');
+            const fd = new FormData(e.target);
+            const name = String(fd.get('name') || '').trim();
+            const duprId = String(fd.get('duprId') || '').trim();
+            if (!name) return;
             try {
                 const player = await api(`${API_BASE}/players`, {
                     method: 'POST',
-                    body: JSON.stringify({ name: query }),
+                    body: JSON.stringify({ name, ...(duprId ? { duprId } : {}) })
                 });
                 allPlayers.push(player);
                 selectPlayer(player);
-                searchInput.value = '';
+                dlg.remove();
+                showToast(`Created and added ${player.name}`);
             } catch (err) {
-                showToast(err.message);
+                const fallback = allPlayers.find(p => p.name.trim().toLowerCase() === name.toLowerCase());
+                if (fallback) {
+                    selectPlayer(fallback);
+                    dlg.remove();
+                    showToast(`Selected existing player "${fallback.name}"`);
+                } else {
+                    errorEl.textContent = err.message;
+                    errorEl.classList.remove('hidden');
+                }
             }
         });
     }
 
-    updatePickDisplay();
-    renderPlayerList();
+    Promise.all([
+        api(`${API_BASE}/players/all`),
+        api(`${API_BASE}/events/${eventId}/status`),
+    ]).then(([players, status]) => {
+        allPlayers = players;
+        (status.players || []).forEach(p => registeredIds.add(p.id));
+        renderAll();
+    }).catch(err => {
+        listEl.innerHTML = `<div class="team-player-empty text-danger">${escapeHtml(err.message)}</div>`;
+    });
+
+    searchInput.addEventListener('input', renderPlayerList);
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const query = searchInput.value.trim();
+        if (!query) return;
+        const existing = findExactPlayerMatch(query);
+        if (existing && !registeredIds.has(existing.id) && !selectedIds().has(existing.id)) {
+            selectPlayer(existing);
+            return;
+        }
+        if (existing && registeredIds.has(existing.id)) {
+            showToast(`${existing.name} is already on a team`);
+            return;
+        }
+        openCreatePlayerDialog();
+    });
+    createBtn.addEventListener('click', openCreatePlayerDialog);
+
+    confirmBtn.addEventListener('click', async () => {
+        if (!picks[0] || !picks[1]) {
+            showToast('Select both players for the team');
+            return;
+        }
+        try {
+            await api(`${API_BASE}/events/${eventId}/teams`, {
+                method: 'POST',
+                body: JSON.stringify({
+                    player1_id: picks[0].id,
+                    player2_id: picks[1].id,
+                }),
+            });
+            overlay.remove();
+            showToast('Team added!');
+            loadEventDetail(eventId);
+        } catch (err) {
+            showToast(err.message);
+        }
+    });
+}
+
+let playersDirectory = [];
+let playersDirectorySearch = '';
+let playersDirectorySort = 'name';
+
+function playerDirectoryMatchesQuery(player, query) {
+    if (!query) return true;
+    const q = query.toLowerCase();
+    if ((player.name || '').toLowerCase().includes(q)) return true;
+    if (player.duprId && String(player.duprId).toLowerCase().includes(q)) return true;
+    return false;
+}
+
+function comparePlayersForDirectory(a, b, sortKey) {
+    const nameCmp = (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' });
+    if (sortKey === 'duprId') {
+        const da = String(a.duprId || '').trim();
+        const db = String(b.duprId || '').trim();
+        if (!da && !db) return nameCmp;
+        if (!da) return 1;
+        if (!db) return -1;
+        const duprCmp = da.localeCompare(db, undefined, { numeric: true, sensitivity: 'base' });
+        return duprCmp !== 0 ? duprCmp : nameCmp;
+    }
+    if (nameCmp !== 0) return nameCmp;
+    return String(a.duprId || '').localeCompare(String(b.duprId || ''), undefined, { numeric: true, sensitivity: 'base' });
 }
 
 function renderPlayers() {
@@ -3733,6 +3811,13 @@ function renderPlayers() {
                 <button class="btn btn-primary btn-sm" id="create-player-btn">+ New</button>
                 ${isLoggedIn() ? '<button class="btn btn-secondary btn-sm" id="logout-btn">Logout</button>' : ''}
             </div>
+        </div>
+        <div class="players-toolbar">
+            <input type="search" id="players-search" class="players-search-input" placeholder="Search name or DUPR ID" value="${escapeHtml(playersDirectorySearch)}" autocomplete="off">
+            <select id="players-sort" class="players-sort-select" aria-label="Sort players">
+                <option value="name"${playersDirectorySort === 'name' ? ' selected' : ''}>Sort: Name</option>
+                <option value="duprId"${playersDirectorySort === 'duprId' ? ' selected' : ''}>Sort: DUPR ID</option>
+            </select>
         </div>
         <div id="players-list">Loading...</div>
     `;
@@ -3745,55 +3830,81 @@ function renderPlayers() {
             }
         });
     }
+    const searchInput = document.getElementById('players-search');
+    const sortSelect = document.getElementById('players-sort');
+    searchInput.addEventListener('input', () => {
+        playersDirectorySearch = searchInput.value.trim();
+        paintPlayersDirectory();
+    });
+    sortSelect.addEventListener('change', () => {
+        playersDirectorySort = sortSelect.value === 'duprId' ? 'duprId' : 'name';
+        paintPlayersDirectory();
+    });
     loadPlayersList();
+}
+
+function paintPlayersDirectory() {
+    const container = document.getElementById('players-list');
+    if (!container) return;
+    if (!playersDirectory.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <div class="empty-state-icon">&#128101;</div>
+                <p>No players yet. Create one to get started!</p>
+            </div>`;
+        return;
+    }
+    const filtered = playersDirectory
+        .filter(p => playerDirectoryMatchesQuery(p, playersDirectorySearch))
+        .sort((a, b) => comparePlayersForDirectory(a, b, playersDirectorySort));
+    if (!filtered.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <p>No players match your search.</p>
+            </div>`;
+        return;
+    }
+    container.innerHTML = filtered.map(p => `
+        <div class="list-item" data-player-id="${p.id}">
+            <div style="flex:1">
+                <div class="list-item-title">${escapeHtml(p.name)}</div>
+                <div class="list-item-meta">${p.duprId ? `DUPR: ${escapeHtml(p.duprId)}` : 'No DUPR ID'}</div>
+            </div>
+            <span class="delete-link delete-player-btn" data-player-id="${p.id}">Delete</span>
+        </div>
+    `).join('');
+    container.querySelectorAll('.list-item').forEach(item => {
+        item.addEventListener('click', async (e) => {
+            if (e.target.classList.contains('delete-player-btn')) return;
+            try {
+                const player = await api(`${API_BASE}/players/${item.dataset.playerId}`);
+                openEditPlayerModal(player);
+            } catch (err) {
+                showToast(err.message);
+            }
+        });
+    });
+    container.querySelectorAll('.delete-player-btn').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const playerId = btn.dataset.playerId;
+            if (!confirm('Delete this player? This cannot be undone.')) return;
+            try {
+                await api(`${API_BASE}/players/${playerId}`, { method: 'DELETE' });
+                showToast('Player deleted');
+                loadPlayersList();
+            } catch (err) {
+                showToast(err.message);
+            }
+        });
+    });
 }
 
 async function loadPlayersList() {
     try {
         const players = await api(`${API_BASE}/players`);
-        const container = document.getElementById('players-list');
-        if (!players || !players.length) {
-            container.innerHTML = `
-                <div class="empty-state">
-                    <div class="empty-state-icon">&#128101;</div>
-                    <p>No players yet. Create one to get started!</p>
-                </div>`;
-            return;
-        }
-        container.innerHTML = players.map(p => `
-            <div class="list-item" data-player-id="${p.id}">
-                <div style="flex:1">
-                    <div class="list-item-title">${escapeHtml(p.name)}</div>
-                    <div class="list-item-meta">${p.duprId ? `DUPR: ${escapeHtml(p.duprId)}` : 'No DUPR ID'}</div>
-                </div>
-                <span class="delete-link delete-player-btn" data-player-id="${p.id}">Delete</span>
-            </div>
-        `).join('');
-        container.querySelectorAll('.list-item').forEach(item => {
-            item.addEventListener('click', async (e) => {
-                if (e.target.classList.contains('delete-player-btn')) return;
-                try {
-                    const player = await api(`${API_BASE}/players/${item.dataset.playerId}`);
-                    openEditPlayerModal(player);
-                } catch (err) {
-                    showToast(err.message);
-                }
-            });
-        });
-        container.querySelectorAll('.delete-player-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                e.stopPropagation();
-                const playerId = btn.dataset.playerId;
-                if (!confirm('Delete this player? This cannot be undone.')) return;
-                try {
-                    await api(`${API_BASE}/players/${playerId}`, { method: 'DELETE' });
-                    showToast('Player deleted');
-                    loadPlayersList();
-                } catch (err) {
-                    showToast(err.message);
-                }
-            });
-        });
+        playersDirectory = Array.isArray(players) ? players : [];
+        paintPlayersDirectory();
     } catch (err) {
         app.innerHTML = `<div class="empty-state"><p class="text-danger">Failed to load players</p><p class="text-muted">${escapeHtml(err.message)}</p></div>`;
     }

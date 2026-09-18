@@ -1,6 +1,6 @@
-Write-Host "==========================================" -ForegroundColor Cyan
-Write-Host "      DEPLOYMENT SOURCE SELECTOR          " -ForegroundColor Cyan
-Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+Write-Host " DEPLOYMENT SOURCE SELECTOR SOURCE -> remote 'live'         " -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
 Write-Host "1) main (Default)" -ForegroundColor Yellow
 Write-Host "2) release/v2.0.0" -ForegroundColor Yellow
 Write-Host "3) release/v3.0.0" -ForegroundColor Yellow
