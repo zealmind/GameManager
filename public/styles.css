@@ -225,6 +225,60 @@ body.hide-bottom-nav .bottom-nav {
     color: var(--text-secondary);
 }
 
+.event-sticky-top {
+    position: sticky;
+    top: -10px;
+    z-index: 12;
+    margin: -10px -10px 8px;
+    background: var(--bg);
+}
+
+.event-sticky-top .app-header {
+    position: relative;
+    top: auto;
+}
+
+.event-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px 8px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+}
+
+.event-tabs[hidden] {
+    display: none;
+}
+
+.event-tab {
+    flex: 1 0 auto;
+    min-width: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 7px 10px;
+    border-radius: 8px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.event-tab.active {
+    background: #eff6ff;
+    color: var(--primary);
+}
+
+.event-tab-panel {
+    display: none;
+}
+
+.event-tab-panel.is-active {
+    display: block;
+}
+
 /* Lists */
 .list-item {
     background: var(--card-bg);

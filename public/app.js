@@ -9,6 +9,8 @@ let accessToken = null;
 let eventDetailPollInterval = null;
 /** Prevents overlapping event-detail fetches from stacking during poll. */
 let eventDetailLoadInFlight = false;
+/** Active event-detail tab id (field | leaderboard | players | stats | matchups). */
+let currentEventDetailTab = null;
 const localGameScores = new Map();
 /** Completed-game score edit panel currently open (blocks poll refresh). */
 let editingCompletedScoreGameId = null;
@@ -1507,6 +1509,7 @@ function openCopyEventModal(eventId, currentName) {
 
 async function openEventDetail(eventId, fromShare = false) {
     currentEventId = eventId;
+    currentEventDetailTab = null;
     navBtns.forEach(b => b.classList.remove('active'));
     // Hide the bottom nav for shared/moderator access — Dashboard and Players
     // are irrelevant and inaccessible without a full account.
@@ -1514,18 +1517,21 @@ async function openEventDetail(eventId, fromShare = false) {
         document.body.classList.add('hide-bottom-nav');
     }
     app.innerHTML = `
-        <div class="app-header">
-            ${showBackButton()}
-            <div style="flex:1; min-width:0;">
-                <h1 id="event-title" style="font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Event Detail</h1>
-                <div id="event-status" class="card-subtitle" style="font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+        <div class="event-sticky-top">
+            <div class="app-header">
+                ${showBackButton()}
+                <div style="flex:1; min-width:0;">
+                    <h1 id="event-title" style="font-size:15px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Event Detail</h1>
+                    <div id="event-status" class="card-subtitle" style="font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"></div>
+                </div>
+                ${fromShare ? `<div class="shared-badge">Shared</div>` : ''}
+                ${accessMode === 'viewer' ? '<div class="shared-badge" style="background:#6b7280;">Viewing</div>' : ''}
+                ${accessMode === 'moderator' ? '<div class="shared-badge" style="background:#d97706;">Moderator</div>' : ''}
+                <div id="event-actions" style="display:flex; gap:4px;"></div>
             </div>
-            ${fromShare ? `<div class="shared-badge">Shared</div>` : ''}
-            ${accessMode === 'viewer' ? '<div class="shared-badge" style="background:#6b7280;">Viewing</div>' : ''}
-            ${accessMode === 'moderator' ? '<div class="shared-badge" style="background:#d97706;">Moderator</div>' : ''}
-            <div id="event-actions" style="display:flex; gap:4px;"></div>
+            ${accessMode === 'viewer' ? '<div class="view-only-banner">You are viewing this event. All actions are disabled.</div>' : ''}
+            <nav class="event-tabs" id="event-tabs" hidden role="tablist" aria-label="Event sections"></nav>
         </div>
-        ${accessMode === 'viewer' ? '<div class="view-only-banner">You are viewing this event. All actions are disabled.</div>' : ''}
         <div id="event-detail">Loading...</div>
     `;
     document.getElementById('back-btn').addEventListener('click', () => switchView('dashboard'));
@@ -1636,6 +1642,7 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
         bindEventDetailActions(eventId, event, status);
         bindCollapsibleSections(eventId, status);
         bindPlayedWithExpand(event);
+        bindEventDetailTabs(event, status, fromShare);
 
         const actionsEl = document.getElementById('event-actions');
         if (actionsEl) {
@@ -1923,86 +1930,101 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             .map(p => `<option value="${p.id}" ${currentCompletedGamesFilter === p.id ? 'selected' : ''}>${getPlayerDisplayName(p, nickNameMap, true, playerStatusMap)}</option>`)
             .join('');
 
-    return `
-        <div class="card">
-            <div class="card-title" style="font-size:16px;">Leaderboard</div>
-            <div id="leaderboard-list">
-                ${renderLeaderboard(status, completedGames)}
-            </div>
-        </div>
+    const playedWithHtml = renderPlayedWithCard(event);
+    const gameStatsGames = [...completedGames].sort((a, b) => {
+        const byNumber = (b.gameNumber || 0) - (a.gameNumber || 0);
+        if (byNumber) return byNumber;
+        return new Date(b.completedAt || 0).getTime() - new Date(a.completedAt || 0).getTime();
+    });
 
+    return `
         ${!status.isEnded && !fromShare ? `
-        <div class="card game-field-card">
-            <div class="card-subtitle mb-2 game-field-title">Game Field</div>
-            <div class="game-field">
-                ${courtsHtml}
+        <div class="event-tab-panel" data-tab-panel="field">
+            <div class="card game-field-card">
+                <div class="game-field">
+                    ${courtsHtml}
+                </div>
             </div>
         </div>
         ` : ''}
 
-        <div class="card">
-            <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px; cursor:pointer;" id="players-toggle">${fixed ? 'Teams' : 'Players'} &#9662;</div>
-                ${!status.isStarted ? `<button class="btn btn-primary btn-sm" id="add-players-btn">${fixed ? '+ Add Team' : '+ Add Players'}</button>` : ''}
-            </div>
-            <div id="players-list" class="${status.isStarted ? 'players-section-collapsed' : ''}">
-                ${playersSectionHtml}
+        <div class="event-tab-panel" data-tab-panel="leaderboard">
+            <div class="card">
+                <div id="leaderboard-list">
+                    ${renderLeaderboard(status, completedGames)}
+                </div>
             </div>
         </div>
 
-        <div class="card">
-            <div class="flex justify-between items-center mb-2">
-                <div class="card-title" style="font-size:16px; cursor:pointer;" id="completed-games-toggle">Game Stats &#9662;</div>
-                <select id="completed-games-player-filter" class="player-filter-select">
-                    <option value="">${fixed ? 'All Teams' : 'All Players'}</option>
-                    ${filterOptions}
-                </select>
+        <div class="event-tab-panel" data-tab-panel="players">
+            <div class="card">
+                ${!status.isStarted ? `
+                <div class="flex justify-between items-center mb-2">
+                    <div class="card-title" style="font-size:16px;">${fixed ? 'Teams' : 'Players'}</div>
+                    <button class="btn btn-primary btn-sm" id="add-players-btn">${fixed ? '+ Add Team' : '+ Add Players'}</button>
+                </div>
+                ` : ''}
+                <div id="players-list">
+                    ${playersSectionHtml}
+                </div>
             </div>
-            <div id="completed-games-list">
-                ${completedGames.length ? completedGames.filter(g => {
-                    if (!currentCompletedGamesFilter) return true;
-                    if (fixed) {
-                        const t1 = teamKeyFromPlayerIds(g.players.team1 || []);
-                        const t2 = teamKeyFromPlayerIds(g.players.team2 || []);
-                        return t1 === currentCompletedGamesFilter || t2 === currentCompletedGamesFilter;
-                    }
-                    return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
-                }).map(g => {
-                    const isEditing = editingCompletedScoreGameId === g.id;
-                    const local1 = getGameLocalScore(g.id, 0);
-                    const local2 = getGameLocalScore(g.id, 1);
-                    const score1 = local1 !== null ? local1 : (g.scores ? g.scores[0] : 0);
-                    const score2 = local2 !== null ? local2 : (g.scores ? g.scores[1] : 0);
-                    return `
-                    <div class="game-card completed-game-card${isEditing ? ' is-editing-score' : ''}" data-game-id="${g.id}">
-                        <div class="game-teams">
-                            <div class="game-team">${courtSideLabels.sideA}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team1, status, nickNameMap) : g.players.team1.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
-                            <div class="game-team">${courtSideLabels.sideB}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team2, status, nickNameMap) : g.players.team2.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
-                            <div class="game-status status-completed">Game #${g.gameNumber}</div>
-                            <div class="game-meta">
-                                court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
-                                ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
-                                ${g.startedAt && g.completedAt ? ` | Duration: ${formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())}` : ''}
+        </div>
+
+        <div class="event-tab-panel" data-tab-panel="stats">
+            <div class="card">
+                <div class="flex justify-between items-center mb-2">
+                    <div class="card-title" style="font-size:16px;">Game Stats</div>
+                    <select id="completed-games-player-filter" class="player-filter-select">
+                        <option value="">${fixed ? 'All Teams' : 'All Players'}</option>
+                        ${filterOptions}
+                    </select>
+                </div>
+                <div id="completed-games-list">
+                    ${gameStatsGames.length ? gameStatsGames.filter(g => {
+                        if (!currentCompletedGamesFilter) return true;
+                        if (fixed) {
+                            const t1 = teamKeyFromPlayerIds(g.players.team1 || []);
+                            const t2 = teamKeyFromPlayerIds(g.players.team2 || []);
+                            return t1 === currentCompletedGamesFilter || t2 === currentCompletedGamesFilter;
+                        }
+                        return (g.players.team1 || []).includes(currentCompletedGamesFilter) || (g.players.team2 || []).includes(currentCompletedGamesFilter);
+                    }).map(g => {
+                        const isEditing = editingCompletedScoreGameId === g.id;
+                        const local1 = getGameLocalScore(g.id, 0);
+                        const local2 = getGameLocalScore(g.id, 1);
+                        const score1 = local1 !== null ? local1 : (g.scores ? g.scores[0] : 0);
+                        const score2 = local2 !== null ? local2 : (g.scores ? g.scores[1] : 0);
+                        return `
+                        <div class="game-card completed-game-card${isEditing ? ' is-editing-score' : ''}" data-game-id="${g.id}">
+                            <div class="game-teams">
+                                <div class="game-team">${courtSideLabels.sideA}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team1, status, nickNameMap) : g.players.team1.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
+                                <div class="game-team">${courtSideLabels.sideB}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team2, status, nickNameMap) : g.players.team2.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
+                                <div class="game-status status-completed">Game #${g.gameNumber}</div>
+                                <div class="game-meta">
+                                    court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
+                                    ${g.completedAt ? ` | End: ${new Date(g.completedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
+                                    ${g.startedAt && g.completedAt ? ` | Duration: ${formatDuration(new Date(g.completedAt).getTime() - new Date(g.startedAt).getTime())}` : ''}
+                                </div>
                             </div>
-                        </div>
-                        <div class="game-score-side">
-                            <div class="game-score-row${isEditing ? ' hidden' : ''}" data-game-id="${g.id}">
-                                <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
-                                <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
-                            </div>
-                            <div class="game-score-edit${isEditing ? '' : ' hidden'}" data-game-id="${g.id}">
-                                <div class="score-editor-row">
-                                    ${renderScoreEditor(g.id, score1, score2)}
-                                    ${renderScoreConfirmActions(g.id, { confirmClass: 'save-score-btn', discardClass: 'cancel-score-btn' })}
+                            <div class="game-score-side">
+                                <div class="game-score-row${isEditing ? ' hidden' : ''}" data-game-id="${g.id}">
+                                    <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
+                                    <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
+                                </div>
+                                <div class="game-score-edit${isEditing ? '' : ' hidden'}" data-game-id="${g.id}">
+                                    <div class="score-editor-row">
+                                        ${renderScoreEditor(g.id, score1, score2)}
+                                        ${renderScoreConfirmActions(g.id, { confirmClass: 'save-score-btn', discardClass: 'cancel-score-btn' })}
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                `;
-                }).join('') : '<div class="text-muted">No completed games yet</div>'}
-             </div>
-         </div>
-         ${renderPlayedWithCard(event)}
+                    `;
+                    }).join('') : '<div class="text-muted">No completed games yet</div>'}
+                </div>
+            </div>
+        </div>
+        ${playedWithHtml ? `<div class="event-tab-panel" data-tab-panel="matchups">${playedWithHtml}</div>` : ''}
      `;
 }
 
@@ -2083,10 +2105,10 @@ function renderPlayedWithCard(event) {
     return `
         <div class="card">
             <div class="played-with-header">
-                <div class="card-title" style="font-size:16px; cursor:pointer; margin:0; flex:1;" id="played-with-toggle">${matrixTitle} &#9662;</div>
+                <div class="card-title" style="font-size:16px; margin:0; flex:1;">${matrixTitle}</div>
                 <button type="button" class="btn btn-sm btn-secondary played-with-expand-btn" id="played-with-expand" title="Expand full screen" aria-label="Expand Who Played with Who">⛶</button>
             </div>
-            <div id="played-with-list" class="played-with-collapsed">
+            <div id="played-with-list">
                 <div class="played-with-matrix-container">
                     ${buildPlayedWithTableHtml(playerIds, matrix, players, { useFullNames: false, labels, isTeamMatrix })}
                 </div>
@@ -2261,59 +2283,77 @@ function bindLeaderboardExpand(eventId) {
     });
 }
 
-function bindCollapsibleSections(eventId, status) {
-    const sections = [
-        {
-            listId: 'players-list',
-            toggleId: 'players-toggle',
-            collapsedClass: 'players-section-collapsed',
-            storageKey: `gm_event_${eventId}_players_collapsed`,
-            label: 'Players',
-            defaultCollapsed: status.isStarted ? true : null,
-        },
-        {
-            listId: 'completed-games-list',
-            toggleId: 'completed-games-toggle',
-            collapsedClass: 'completed-games-collapsed',
-            storageKey: `gm_event_${eventId}_gamestats_collapsed`,
-            label: 'Game Stats',
-            defaultCollapsed: !status.isEnded ? true : null,
-        },
-        {
-            listId: 'played-with-list',
-            toggleId: 'played-with-toggle',
-            collapsedClass: 'played-with-collapsed',
-            storageKey: `gm_event_${eventId}_playedwith_collapsed`,
-            label: getMatchupMetaLabel(status),
-            defaultCollapsed: status.isStarted ? true : null,
-        },
-    ];
-
-    for (const section of sections) {
-        const list = document.getElementById(section.listId);
-        const toggle = document.getElementById(section.toggleId);
-        if (!list || !toggle) continue;
-
-        const stored = localStorage.getItem(section.storageKey);
-        let isCollapsed;
-        if (stored !== null) {
-            isCollapsed = stored === 'true';
-        } else if (section.defaultCollapsed !== null) {
-            isCollapsed = section.defaultCollapsed;
-        } else {
-            isCollapsed = list.classList.contains(section.collapsedClass);
+function getEventDetailTabs(event, status, fromShare = false) {
+    const tabs = [];
+    if (status.isStarted && !status.isEnded && !fromShare) {
+        tabs.push({ id: 'field', label: 'Field' });
+    }
+    if (status.isStarted) {
+        tabs.push({ id: 'leaderboard', label: 'Rank' });
+        tabs.push({ id: 'players', label: isFixedPartnerEvent(status) ? 'Teams' : 'Players' });
+        tabs.push({ id: 'stats', label: 'Stats' });
+        if (document.querySelector('[data-tab-panel="matchups"]')) {
+            tabs.push({ id: 'matchups', label: 'Played' });
         }
+    }
+    return tabs;
+}
 
-        list.classList.toggle(section.collapsedClass, isCollapsed);
-        toggle.innerHTML = `${section.label} ${isCollapsed ? '&#9662;' : '&#9652;'}`;
-
-        toggle.addEventListener('click', () => {
-            const collapsed = list.classList.toggle(section.collapsedClass);
-            toggle.innerHTML = `${section.label} ${collapsed ? '&#9662;' : '&#9652;'}`;
-            localStorage.setItem(section.storageKey, String(collapsed));
-        });
+function activateEventDetailTab(tabId, { persist = true, scroll = false } = {}) {
+    currentEventDetailTab = tabId;
+    if (persist && currentEventId) {
+        try { localStorage.setItem(`gm_event_${currentEventId}_tab`, tabId); } catch {}
     }
 
+    document.querySelectorAll('#event-tabs [data-tab]').forEach(btn => {
+        const selected = btn.dataset.tab === tabId;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-selected', selected ? 'true' : 'false');
+        btn.tabIndex = selected ? 0 : -1;
+    });
+    document.querySelectorAll('#event-detail [data-tab-panel]').forEach(panel => {
+        panel.classList.toggle('is-active', panel.dataset.tabPanel === tabId);
+        panel.hidden = panel.dataset.tabPanel !== tabId;
+    });
+
+    if (scroll) {
+        const main = document.getElementById('main-content');
+        if (main) main.scrollTop = 0;
+    }
+}
+
+function bindEventDetailTabs(event, status, fromShare = false) {
+    const tabsEl = document.getElementById('event-tabs');
+    if (!tabsEl) return;
+
+    const tabs = getEventDetailTabs(event, status, fromShare);
+    if (!tabs.length) {
+        tabsEl.hidden = true;
+        tabsEl.innerHTML = '';
+        return;
+    }
+
+    const stored = (() => {
+        try { return localStorage.getItem(`gm_event_${event.id}_tab`); } catch { return null; }
+    })();
+    const available = tabs.map(t => t.id);
+    const selected = available.includes(currentEventDetailTab)
+        ? currentEventDetailTab
+        : (available.includes(stored) ? stored : available[0]);
+
+    tabsEl.hidden = false;
+    tabsEl.innerHTML = tabs.map(tab => `
+        <button type="button" class="event-tab" role="tab" data-tab="${tab.id}" aria-selected="false" tabindex="-1">${escapeHtml(tab.label)}</button>
+    `).join('');
+
+    tabsEl.querySelectorAll('[data-tab]').forEach(btn => {
+        btn.addEventListener('click', () => activateEventDetailTab(btn.dataset.tab, { scroll: true }));
+    });
+
+    activateEventDetailTab(selected, { persist: true, scroll: false });
+}
+
+function bindCollapsibleSections(eventId, status) {
     bindLeaderboardExpand(eventId);
 
     // Restore per-group collapsed state (Waiting, Playing, Away, etc.)
