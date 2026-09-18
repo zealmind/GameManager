@@ -18,14 +18,18 @@ function isOwnerOrModerator(event, req) {
 // POST /players - Create a global player
 router.post('/', auth_1.authenticate, async (req, res) => {
     try {
-        const { name } = req.body;
+        const { name, duprId } = req.body;
         if (!name) {
             return res.status(400).json({ error: 'Missing required field: name' });
         }
-        const player = await db.createPlayer(name, req.user.id);
+        const normalizedDuprId = duprId == null || String(duprId).trim() === '' ? undefined : String(duprId).trim();
+        const player = await db.createPlayer(name, req.user.id, normalizedDuprId);
         res.status(201).json(player);
     }
     catch (err) {
+        if (err?.message?.includes('already exists') || err?.message?.includes('cannot be empty')) {
+            return res.status(409).json({ error: err.message });
+        }
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -33,6 +37,16 @@ router.post('/', auth_1.authenticate, async (req, res) => {
 router.get('/', auth_1.authenticate, (req, res) => {
     try {
         const players = db.getPlayersByOwner(req.user.id);
+        res.json(players);
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// GET /players/all - List all players (authenticated)
+router.get('/all', auth_1.authenticate, async (req, res) => {
+    try {
+        const players = db.getAllPlayers();
         res.json(players);
     }
     catch (err) {
@@ -52,6 +66,35 @@ router.get('/:playerId', auth_1.authenticate, async (req, res) => {
         res.json(player);
     }
     catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// PATCH /players/:playerId - Update player details (name, DUPR ID)
+router.patch('/:playerId', auth_1.authenticate, async (req, res) => {
+    try {
+        const player = db.getPlayer(req.params.playerId);
+        if (!player) {
+            return res.status(404).json({ error: 'Player not found' });
+        }
+        if (player.ownerId !== req.user.id) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+        const { name, duprId } = req.body;
+        if (name === undefined && duprId === undefined) {
+            return res.status(400).json({ error: 'Provide at least one of: name, duprId' });
+        }
+        const updates = {};
+        if (name !== undefined)
+            updates.name = name;
+        if (duprId !== undefined)
+            updates.duprId = duprId;
+        const updated = await db.updatePlayer(player.id, updates);
+        res.json(updated);
+    }
+    catch (err) {
+        if (err?.message?.includes('already exists') || err?.message?.includes('cannot be empty')) {
+            return res.status(400).json({ error: err.message });
+        }
         res.status(500).json({ error: 'Internal server error' });
     }
 });
@@ -76,12 +119,13 @@ router.post('/:eventId/players', eventAccess_1.withEventAccess, eventAccess_1.lo
             }
         }
         else if (name) {
-            const existing = db.findPlayerByName(name);
+            const userId = req.user?.id;
+            const existing = db.findPlayerByName(name) ||
+                (userId ? db.findPlayerByDuprId(name, userId) : db.findPlayerByDuprId(name));
             if (existing) {
                 player = existing;
             }
             else {
-                const userId = req.user?.id;
                 if (!userId) {
                     return res.status(403).json({ error: 'Forbidden' });
                 }
@@ -91,12 +135,15 @@ router.post('/:eventId/players', eventAccess_1.withEventAccess, eventAccess_1.lo
         else {
             return res.status(400).json({ error: 'Either player_id or name must be provided' });
         }
+        if (event.isFixedPartnerDoubles()) {
+            return res.status(400).json({ error: 'Use POST /events/:eventId/teams to add fixed partner teams' });
+        }
         const existingReg = event.getRegistration(player.id);
         if (existingReg) {
             return res.status(409).json({ error: 'Player already registered for this event' });
         }
         event.addPlayer(player);
-        await db.persist();
+        await db.persistEvent(event.id);
         res.status(201).json({ player, registration: event.getRegistration(player.id) });
     }
     catch (err) {
@@ -118,15 +165,39 @@ router.patch('/:eventId/players/:playerId', eventAccess_1.withEventAccess, event
         if (!validStatuses.includes(status)) {
             return res.status(400).json({ error: 'Invalid status. Must be WAITING, PLAYING, UNAVAILABLE, AWAY, or RETIRED' });
         }
-        const updated = event.updateRegistration(req.params.playerId, { status });
+        const playerId = req.params.playerId;
+        const updated = event.getRegistration(playerId);
         if (!updated) {
             return res.status(404).json({ error: 'Player registration not found for this event' });
         }
+        if (event.isFixedPartnerDoubles()) {
+            event.setTeamStatus(playerId, status);
+        }
+        else {
+            event.updateRegistration(playerId, { status });
+        }
         if (status === 'WAITING') {
             event.recalculateTargetGames();
+            const reg = event.getRegistration(playerId);
+            if (reg && reg.priority <= 0) {
+                if (event.isFixedPartnerDoubles()) {
+                    event.syncTeamRegistration(playerId, { priority: 5 });
+                }
+                else {
+                    event.updateRegistration(playerId, { priority: 5 });
+                }
+            }
         }
-        await db.persist();
-        res.json(updated);
+        const affectedIds = event.isFixedPartnerDoubles()
+            ? [playerId, event.getTeamMate(playerId)].filter((id) => !!id)
+            : [playerId];
+        if (status === 'WAITING') {
+            await db.persistEvent(event.id);
+        }
+        else {
+            await db.persistRegistrations(event.id, affectedIds);
+        }
+        res.json(event.getRegistration(playerId) || updated);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -144,6 +215,16 @@ router.delete('/:playerId', auth_1.authenticate, async (req, res) => {
         }
         await db.deletePlayer(req.params.playerId);
         res.json({ success: true });
+    }
+    catch (err) {
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+// GET /players/all - List all players (authenticated)
+router.get('/all', auth_1.authenticate, async (req, res) => {
+    try {
+        const players = db.getAllPlayers();
+        res.json(players);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });

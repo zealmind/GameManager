@@ -434,3 +434,203 @@ describe('Fixed Partner Doubles', () => {
   });
 });
 
+describe('Singles Round Robin', () => {
+  let db: Database;
+  let scheduler: SchedulingService;
+
+  beforeEach(async () => {
+    db = Database.getInstance();
+    await db.clear();
+    scheduler = new SchedulingService();
+  });
+
+  async function createSinglesEventWithPlayers(playerCount: number, gamesPerPlayer = 4) {
+    const event = await db.createEvent('Singles Event', gamesPerPlayer, 2, DEFAULT_OWNER, 'SINGLES_ROUND_ROBIN');
+    const players = [];
+    for (let i = 1; i <= playerCount; i++) {
+      const player = await db.createPlayer(`Player ${i}`, DEFAULT_OWNER);
+      event.addPlayer(player);
+      players.push(player);
+    }
+    return { event, players };
+  }
+
+  it('should block start until at least 4 players are registered', async () => {
+    const { event } = await createSinglesEventWithPlayers(3);
+    expect(event.validateCanStart().ok).toBe(false);
+
+    const player = await db.createPlayer('Player 4', DEFAULT_OWNER);
+    event.addPlayer(player);
+    expect(event.validateCanStart().ok).toBe(true);
+  });
+
+  it('should always create 1v1 matchups during auto allot', async () => {
+    const { event } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.game).toBeDefined();
+    expect(result.game!.players.team1).toHaveLength(1);
+    expect(result.game!.players.team2).toHaveLength(1);
+  });
+
+  it('should prefer new opponents over repeat matchups', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const [a, b, c, d] = players.map(p => p.id);
+    event.getRegistration(a)!.partners = [b];
+    event.getRegistration(b)!.partners = [a];
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    const ids = [...result.game!.players.team1, ...result.game!.players.team2];
+    const isRepeat = ids.includes(a) && ids.includes(b);
+    expect(isRepeat).toBe(false);
+  });
+
+  it('should warn when only repeat opponents are available', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(2);
+    const [a, b] = players.map(p => p.id);
+    event.getRegistration(a)!.partners = [b];
+    event.getRegistration(b)!.partners = [a];
+    for (const p of players) {
+      const reg = event.getRegistration(p.id)!;
+      reg.status = 'WAITING';
+      reg.priority = 10;
+    }
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    expect(result.warning).toMatch(/repeat opponent/i);
+  });
+
+  it('should record opponents in partners after a game', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 8];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    const [p1, p2] = [
+      result.game!.players.team1[0],
+      result.game!.players.team2[0],
+    ];
+    expect(event.getRegistration(p1)!.partners).toContain(p2);
+    expect(event.getRegistration(p2)!.partners).toContain(p1);
+  });
+
+  it('should mark player AWAY after reaching game cap', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4, 1);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 5];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    const p1 = result.game!.players.team1[0];
+    const p2 = result.game!.players.team2[0];
+    expect(event.getRegistration(p1)!.status).toBe('AWAY');
+    expect(event.getRegistration(p2)!.status).toBe('AWAY');
+    expect(players.filter(p => event.getRegistration(p.id)!.status === 'WAITING').length).toBe(2);
+  });
+
+  it('should exclude players from auto allot after 2 consecutive singles games', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const tired = players[0];
+    const reg = event.getRegistration(tired.id)!;
+    reg.consecutiveGamesPlayed = 2;
+    reg.status = 'WAITING';
+    reg.priority = 5;
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    const ids = [...result.game!.players.team1, ...result.game!.players.team2];
+    expect(ids).not.toContain(tired.id);
+  });
+
+  it('should reset consecutive streak when a player sits out an allotment round', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const rested = players[0];
+    const reg = event.getRegistration(rested.id)!;
+    reg.consecutiveGamesPlayed = 2;
+    reg.status = 'WAITING';
+    reg.priority = 5;
+
+    scheduler.assignNextGame(event.id, 1);
+    expect(event.getRegistration(rested.id)!.consecutiveGamesPlayed).toBe(0);
+  });
+
+  it('should not promote wasBackToBack finishers to priority 7 in singles', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(2);
+    const [a, b] = players.map(p => p.id);
+    const regA = event.getRegistration(a)!;
+    const regB = event.getRegistration(b)!;
+    regA.priority = 7;
+    regB.priority = 5;
+    regA.status = 'WAITING';
+    regB.status = 'WAITING';
+
+    const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.1);
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 5];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    expect(event.getRegistration(a)!.priority).toBe(5);
+    randomSpy.mockRestore();
+  });
+
+  it('should promote the finisher with fewer games when singles back-to-back promotion triggers', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(2);
+    const [a, b] = players.map(p => p.id);
+    const regA = event.getRegistration(a)!;
+    const regB = event.getRegistration(b)!;
+    regA.gamesPlayedCount = 1;
+    regB.gamesPlayedCount = 3;
+    regA.priority = 5;
+    regB.priority = 5;
+    regA.status = 'WAITING';
+    regB.status = 'WAITING';
+
+    const randomSpy = jest.spyOn(Math, 'random').mockReturnValue(0.1);
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 5];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    expect(event.getRegistration(a)!.priority).toBe(7);
+    expect(event.getRegistration(b)!.priority).toBe(5);
+    randomSpy.mockRestore();
+  });
+
+  it('should increment consecutive games played after each singles game', async () => {
+    const { event, players } = await createSinglesEventWithPlayers(4);
+    event.start();
+
+    const result = scheduler.assignNextGame(event.id, 1);
+    expect(result.success).toBe(true);
+    result.game!.scores = [11, 5];
+    scheduler.startGame(event.id, result.game!.id);
+    scheduler.endGame(event.id, result.game!.id);
+
+    for (const pid of [...result.game!.players.team1, ...result.game!.players.team2]) {
+      expect(event.getRegistration(pid)!.consecutiveGamesPlayed).toBe(1);
+    }
+  });
+});
+

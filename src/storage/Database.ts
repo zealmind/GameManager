@@ -102,6 +102,7 @@ export class Database {
     await this.migrateAddRegistrationNickName();
     await this.migrateAddEventFormat();
     await this.migrateAddFixedPartnerId();
+    await this.migrateAddConsecutiveGamesPlayed();
     await this.load();
   }
 
@@ -134,6 +135,16 @@ export class Database {
   private async migrateAddFixedPartnerId(): Promise<void> {
     try {
       await this.client.execute('ALTER TABLE registrations ADD COLUMN fixed_partner_id TEXT');
+    } catch {
+      // column already exists
+    }
+  }
+
+  private async migrateAddConsecutiveGamesPlayed(): Promise<void> {
+    try {
+      await this.client.execute(
+        'ALTER TABLE registrations ADD COLUMN consecutive_games_played INTEGER NOT NULL DEFAULT 0'
+      );
     } catch {
       // column already exists
     }
@@ -191,8 +202,8 @@ export class Database {
 
   private registrationUpsertStmt(r: EventPlayerRegistration): { sql: string; args: any[] } {
     return {
-      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO registrations (eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id, consecutive_games_played)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(eventId, playerId) DO UPDATE SET
               gamesPlayedCount = excluded.gamesPlayedCount,
               status = excluded.status,
@@ -200,7 +211,8 @@ export class Database {
               partners = excluded.partners,
               priority = excluded.priority,
               nick_name = excluded.nick_name,
-              fixed_partner_id = excluded.fixed_partner_id`,
+              fixed_partner_id = excluded.fixed_partner_id,
+              consecutive_games_played = excluded.consecutive_games_played`,
       args: [
         r.eventId,
         r.playerId,
@@ -211,6 +223,7 @@ export class Database {
         r.priority ?? 10,
         r.nickName ?? null,
         r.fixedPartnerId ?? null,
+        r.consecutiveGamesPlayed ?? 0,
       ],
     };
   }
@@ -435,7 +448,7 @@ export class Database {
         'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format FROM events'
       );
       const regRows = await this.client.execute(
-        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id FROM registrations'
+        'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id, consecutive_games_played FROM registrations'
       );
       const gameRows = await this.client.execute(
         `SELECT id, eventId, gameNumber, courtId, players, scores, createdAt,
@@ -458,6 +471,9 @@ export class Database {
           priority: row.priority != null ? Number(row.priority) : 10,
           nickName: row.nick_name || undefined,
           fixedPartnerId: row.fixed_partner_id || undefined,
+          consecutiveGamesPlayed: row.consecutive_games_played != null
+            ? Number(row.consecutive_games_played)
+            : 0,
         };
         const list = regsByEvent.get(reg.eventId) || [];
         list.push(reg);
@@ -833,6 +849,7 @@ export class Database {
       targetGames,
       partners: [],
       priority: 10,
+      consecutiveGamesPlayed: 0,
     };
     this.eventRegistrations.set(key, registration);
     const event = this.events.get(eventId);

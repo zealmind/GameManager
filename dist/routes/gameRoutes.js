@@ -29,11 +29,16 @@ router.delete('/:eventId/courts/:courtId/allot', eventAccess_1.withEventAccess, 
         if (!active) {
             return res.status(404).json({ error: 'No active allotment on this court' });
         }
+        const playerIds = [...active.players.team1, ...active.players.team2];
         const result = schedulingService.cancelGame(req.params.eventId, active.id);
         if (!result.success) {
             return res.status(400).json({ error: result.reason });
         }
-        await db.persist();
+        // Delete the game row + update player registrations (PLAYING→WAITING)
+        await Promise.all([
+            db.client.execute('DELETE FROM games WHERE id = ?', [active.id]),
+            db.persistRegistrations(req.params.eventId, playerIds),
+        ]);
         res.json({ success: true });
     }
     catch (err) {
@@ -61,8 +66,16 @@ router.post('/:eventId/schedule', eventAccess_1.withEventAccess, eventAccess_1.l
                 blockingConstraints: result.blockingConstraints
             });
         }
-        await db.persist();
-        res.status(201).json(result.game);
+        const game = result.game;
+        const playerIds = [...game.players.team1, ...game.players.team2];
+        await Promise.all([
+            db.persistNewGame(game, false),
+            db.persistRegistrations(req.params.eventId, playerIds),
+        ]);
+        res.status(201).json({
+            ...game,
+            ...(result.warning ? { warning: result.warning } : {})
+        });
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -86,7 +99,7 @@ router.post('/:eventId/end', eventAccess_1.withEventAccess, eventAccess_1.loadEv
             return res.status(400).json({ error: 'Event has already been ended' });
         }
         event.endedAt = new Date();
-        await db.persist();
+        await db.persistEvent(req.params.eventId);
         res.json({ success: true, endedAt: event.endedAt });
     }
     catch (err) {
@@ -128,7 +141,6 @@ router.post('/:eventId/courts/:courtId/allot-manual', eventAccess_1.withEventAcc
         }
         const team1Clean = team1.filter(Boolean);
         const team2Clean = team2.filter(Boolean);
-        let game;
         if (team1Clean.length + team2Clean.length < 4) {
             const result = schedulingService.completePartialGame(req.params.eventId, courtId, team1Clean, team2Clean);
             if (!result.success || !result.game) {
@@ -137,17 +149,27 @@ router.post('/:eventId/courts/:courtId/allot-manual', eventAccess_1.withEventAcc
                     blockingConstraints: result.blockingConstraints
                 });
             }
-            game = result.game;
+            // completePartialGame already set PLAYING and pushed the game
+            const partialPlayerIds = [...result.game.players.team1, ...result.game.players.team2];
+            await Promise.all([
+                db.persistNewGame(result.game, false),
+                db.persistRegistrations(req.params.eventId, partialPlayerIds),
+            ]);
+            return res.status(201).json({
+                ...result.game,
+                ...(result.warning ? { warning: result.warning } : {})
+            });
         }
-        else {
-            game = (0, Game_1.createGame)(req.params.eventId, courtId, team1Clean, team2Clean);
-        }
+        const game = (0, Game_1.createGame)(req.params.eventId, courtId, team1Clean, team2Clean);
         const allGamePlayers = [...game.players.team1, ...game.players.team2];
         for (const pid of allGamePlayers) {
             event.updateRegistration(pid, { status: 'PLAYING' });
         }
         event.games.push(game);
-        await db.persist();
+        await Promise.all([
+            db.persistNewGame(game, false),
+            db.persistRegistrations(req.params.eventId, allGamePlayers),
+        ]);
         res.status(201).json(game);
     }
     catch (err) {
@@ -179,8 +201,17 @@ router.post('/:eventId/courts/:courtId/allot', eventAccess_1.withEventAccess, ev
                 blockingConstraints: result.blockingConstraints
             });
         }
-        await db.persist();
-        res.status(201).json(result.game);
+        const game = result.game;
+        const playerIds = [...game.players.team1, ...game.players.team2];
+        // New game row + updated player registrations (WAITING→PLAYING)
+        await Promise.all([
+            db.persistNewGame(game, false),
+            db.persistRegistrations(req.params.eventId, playerIds),
+        ]);
+        res.status(201).json({
+            ...game,
+            ...(result.warning ? { warning: result.warning } : {})
+        });
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -194,10 +225,11 @@ router.post('/:eventId/games/:gameId/start', eventAccess_1.withEventAccess, even
             return res.status(403).json({ error: 'Forbidden' });
         }
         const result = schedulingService.startGame(req.params.eventId, req.params.gameId);
-        await db.persist();
         if (!result.success) {
             return res.status(400).json({ error: result.reason });
         }
+        // Only the one game row changed — skip full persistEvent
+        await db.persistGameState(result.game, false);
         res.json(result.game);
     }
     catch (err) {
@@ -219,8 +251,15 @@ router.post('/:eventId/games/:gameId/end', eventAccess_1.withEventAccess, eventA
         if (!result.success) {
             return res.status(400).json({ error: result.reason, blockingConstraints: result.blockingConstraints });
         }
-        await db.persist();
-        res.json(result.game);
+        // Game row changed + player registrations changed (status PLAYING→WAITING, gamesPlayedCount++)
+        // Targeted writes instead of full persistEvent
+        const game = result.game;
+        const playerIds = [...game.players.team1, ...game.players.team2];
+        await Promise.all([
+            db.persistGameState(game, true),
+            db.persistRegistrations(req.params.eventId, playerIds),
+        ]);
+        res.json(game);
     }
     catch (err) {
         res.status(500).json({ error: 'Internal server error' });
@@ -246,7 +285,8 @@ router.post('/:eventId/games/:gameId/score', eventAccess_1.withEventAccess, even
             if (!activeGame.started)
                 return res.status(400).json({ error: 'Game has not started yet' });
             activeGame.scores = scores;
-            await db.persist();
+            // Targeted write: only the scores column on this one game row
+            await db.persistGameScore(gameId, scores);
             return res.json(activeGame);
         }
         // Completed game: update history (and any leftover active copy)
@@ -258,7 +298,8 @@ router.post('/:eventId/games/:gameId/score', eventAccess_1.withEventAccess, even
             historyGame.scores = scores;
         if (activeGame?.completed)
             activeGame.scores = scores;
-        await db.persist();
+        // Targeted write: only the scores column on this one game row
+        await db.persistGameScore(gameId, scores);
         res.json(completedGame);
     }
     catch (err) {
@@ -283,10 +324,8 @@ router.get('/:eventId/games', eventAccess_1.withEventAccess, eventAccess_1.loadE
 router.get('/:eventId/status', eventAccess_1.withEventAccess, eventAccess_1.loadEvent, async (req, res) => {
     try {
         const event = req.event;
-        const players = Array.from(event.players.values());
-        if (event.isStarted() && players.some(p => !p.nickName)) {
-            event.assignNickNames();
-            await db.persist();
+        if (event.isStarted() && event.assignNickNames()) {
+            await db.persistEvent(req.params.eventId);
         }
         const avgGames = event.getAverageGamesPlayed();
         const availablePlayers = event.getAvailablePlayers();
@@ -304,6 +343,7 @@ router.get('/:eventId/status', eventAccess_1.withEventAccess, eventAccess_1.load
                 isAvailable: !active,
                 game: active ? {
                     id: active.id,
+                    gameNumber: active.gameNumber,
                     team1: active.players.team1.map((id) => ({
                         id,
                         name: event.players.get(id)?.name || id.slice(0, 8)
@@ -313,15 +353,49 @@ router.get('/:eventId/status', eventAccess_1.withEventAccess, eventAccess_1.load
                         name: event.players.get(id)?.name || id.slice(0, 8)
                     })),
                     started: active.started,
-                    scores: active.scores
+                    scores: active.scores,
+                    allotmentWarning: active.allotmentWarning || null
                 } : null
             });
         }
         const activeGames = event.games.filter((g) => !g.completed);
+        const ev = event;
+        const teams = event.isFixedPartnerDoubles()
+            ? event.getTeams().map((team) => ({
+                id: team.id,
+                playerIds: team.playerIds,
+                gamesPlayed: team.gamesPlayed,
+                targetGames: team.targetGames,
+                status: team.status,
+                priority: team.priority,
+                players: team.playerIds.map((pid) => {
+                    const p = event.players.get(pid);
+                    const reg = event.registrations.get(pid);
+                    return {
+                        id: pid,
+                        name: p?.name || pid.slice(0, 8),
+                        nickName: reg?.nickName,
+                    };
+                }),
+            }))
+            : [];
         res.json({
+            // --- identity / metadata (replaces separate GET /events/:id call) ---
+            id: event.id,
+            name: event.name,
+            format: event.format,
+            ownerId: ev.ownerId,
+            numCourts: event.courts,
+            totalGamesToPlay: event.totalGamesToPlay,
+            teams,
+            sharedAccess: event.sharedAccess,
+            registrations: Array.from(event.registrations.values()),
+            games: event.games,
+            gameHistory: event.gameHistory,
+            // --- legacy alias kept for any callers that used eventId ---
             eventId: event.id,
             eventName: event.name,
-            totalGamesToPlay: event.totalGamesToPlay,
+            // --- live counts ---
             gamesPlayed: event.gameHistory.length,
             gamesRemaining: event.totalGamesToPlay - event.gameHistory.length,
             averageGamesPlayed: avgGames,
@@ -345,15 +419,21 @@ router.get('/:eventId/status', eventAccess_1.withEventAccess, eventAccess_1.load
                     const partner = event.players.get(pid);
                     return partner ? partner.name : pid.slice(0, 8);
                 });
+                const fixedPartnerId = reg?.fixedPartnerId;
+                const fixedPartner = fixedPartnerId ? event.players.get(fixedPartnerId) : undefined;
                 return {
                     id: p.id,
                     name: p.name,
-                    nickName: p.nickName,
+                    nickName: reg?.nickName,
+                    duprId: p.duprId,
+                    ownerId: p.ownerId,
                     gamesPlayed: reg?.gamesPlayedCount || 0,
                     targetGames: reg?.targetGames || 0,
                     status: reg?.status || 'UNKNOWN',
                     partners: partnerNames,
-                    partnerIds
+                    partnerIds,
+                    fixedPartnerId,
+                    fixedPartnerName: fixedPartner?.name,
                 };
             }),
             activeGames: activeGames.map((g) => ({

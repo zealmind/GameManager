@@ -3,7 +3,7 @@ import { Player } from './Player';
 import type { Game } from './Game';
 import type { EventPlayerRegistration, PlayerStatus } from './EventPlayerRegistration';
 
-export type EventFormat = 'ROTATING_DOUBLES' | 'FIXED_PARTNER_DOUBLES';
+export type EventFormat = 'ROTATING_DOUBLES' | 'FIXED_PARTNER_DOUBLES' | 'SINGLES_ROUND_ROBIN';
 
 export interface EventTeam {
   id: string;
@@ -49,6 +49,10 @@ export class Event {
 
   isFixedPartnerDoubles(): boolean {
     return this.format === 'FIXED_PARTNER_DOUBLES';
+  }
+
+  isSinglesRoundRobin(): boolean {
+    return this.format === 'SINGLES_ROUND_ROBIN';
   }
 
   isStarted(): boolean {
@@ -211,6 +215,7 @@ export class Event {
         targetGames: this.calculateInitialTargetGames(),
         partners: [],
         priority: 10,
+        consecutiveGamesPlayed: 0,
       };
       this.registrations.set(player.id, registration);
     }

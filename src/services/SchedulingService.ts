@@ -125,6 +125,130 @@ export class SchedulingService {
     return `Best available matchup used — these teams have already faced each other ${best.matrixCost} time(s)`;
   }
 
+  private buildSinglesWarning(best: ScoredAssignment): string | undefined {
+    if (best.partnerRepeats > 0) {
+      return 'Best available matchup used — repeat opponent (no unused opponents available)';
+    }
+    if (best.matrixCost > 0) {
+      return `Best available matchup used — these players have already faced each other ${best.matrixCost} time(s)`;
+    }
+    return undefined;
+  }
+
+  private compareSinglesAssignments(a: ScoredAssignment, b: ScoredAssignment): number {
+    if (a.partnerRepeats !== b.partnerRepeats) return a.partnerRepeats - b.partnerRepeats;
+    if (a.matrixCost !== b.matrixCost) return a.matrixCost - b.matrixCost;
+    if (a.gamesPlayedSum !== b.gamesPlayedSum) return a.gamesPlayedSum - b.gamesPlayedSum;
+    if (a.prioritySum !== b.prioritySum) return b.prioritySum - a.prioritySum;
+    return 0;
+  }
+
+  private static readonly SINGLES_MAX_CONSECUTIVE_GAMES = 2;
+  private static readonly SINGLES_BACK_TO_BACK_PROMOTE_CHANCE = 0.25;
+
+  private isSinglesResting(reg: { consecutiveGamesPlayed?: number }): boolean {
+    return (reg.consecutiveGamesPlayed ?? 0) >= SchedulingService.SINGLES_MAX_CONSECUTIVE_GAMES;
+  }
+
+  private resetSinglesRestStreaks(event: Event, selectedIds: Set<string>): void {
+    if (!event.isSinglesRoundRobin()) return;
+    for (const reg of event.registrations.values()) {
+      if (reg.status !== 'WAITING') continue;
+      if (selectedIds.has(reg.playerId)) continue;
+      reg.consecutiveGamesPlayed = 0;
+    }
+  }
+
+  /** Singles only: 25% chance to promote one finisher; never re-promote wasBackToBack; prefer fewer games. */
+  private applySinglesEndGamePriority(event: Event, justFinishedIds: string[]): void {
+    const wasBackToBack = new Set<string>();
+    for (const pid of justFinishedIds) {
+      const reg = event.getRegistration(pid);
+      if (reg && reg.priority === 7) {
+        wasBackToBack.add(pid);
+      }
+    }
+
+    for (const pid of justFinishedIds) {
+      const reg = event.getRegistration(pid);
+      if (reg && reg.status === 'WAITING') {
+        reg.priority = 5;
+      }
+    }
+
+    const newPlayerCount = event.getAvailablePlayers().filter(p => this.getPlayerPriority(p.id, event) === 10).length;
+    if (newPlayerCount !== 0 && newPlayerCount >= 3) return;
+    if (Math.random() >= SchedulingService.SINGLES_BACK_TO_BACK_PROMOTE_CHANCE) return;
+
+    const eligible = justFinishedIds.filter(pid => {
+      const reg = event.getRegistration(pid);
+      return reg && reg.status === 'WAITING' && !wasBackToBack.has(pid);
+    });
+    if (eligible.length === 0) return;
+
+    eligible.sort((a, b) => {
+      const ga = event.getRegistration(a)!.gamesPlayedCount;
+      const gb = event.getRegistration(b)!.gamesPlayedCount;
+      if (ga !== gb) return ga - gb;
+      return Math.random() - 0.5;
+    });
+
+    event.getRegistration(eligible[0])!.priority = 7;
+  }
+
+  /**
+   * Find the best 1v1 among waiting players. Minimize opponent repeats, then fairness.
+   */
+  private findBest1v1(available: Player[], event: Event): ScoredAssignment | null {
+    if (available.length < 2) return null;
+
+    const coPlay = this.buildCoPlayCounts(event);
+    const pool = available.slice(0, Math.min(available.length, 14));
+    let best: ScoredAssignment | null = null;
+
+    for (let i = 0; i < pool.length; i++) {
+      for (let j = i + 1; j < pool.length; j++) {
+        const p1 = pool[i].id;
+        const p2 = pool[j].id;
+        const opponentRepeat = this.hasPlayedTogether(p1, p2, event) ? 1 : 0;
+        const rematchCount = this.getCoPlay(coPlay, p1, p2);
+        const scored: ScoredAssignment = {
+          team1: [p1],
+          team2: [p2],
+          partnerRepeats: opponentRepeat,
+          matrixCost: rematchCount,
+          maxCoPlay: rematchCount,
+          zeroPairs: rematchCount === 0 ? 1 : 0,
+          prioritySum: this.getPlayerPriority(p1, event) + this.getPlayerPriority(p2, event),
+          gamesPlayedSum:
+            (event.getRegistration(p1)?.gamesPlayedCount ?? 0) +
+            (event.getRegistration(p2)?.gamesPlayedCount ?? 0),
+        };
+        if (!best || this.compareSinglesAssignments(scored, best) < 0) best = scored;
+      }
+    }
+
+    return best;
+  }
+
+  private commitSinglesAssignment(
+    event: Event,
+    eventId: string,
+    courtId: number,
+    assignment: ScoredAssignment
+  ): ScheduleResult {
+    const game = createGame(eventId, courtId, assignment.team1, assignment.team2);
+    const warning = this.buildSinglesWarning(assignment);
+    if (warning) game.allotmentWarning = warning;
+    const selectedIds = new Set([...assignment.team1, ...assignment.team2]);
+    for (const pid of selectedIds) {
+      event.updateRegistration(pid, { status: 'PLAYING' });
+    }
+    this.resetSinglesRestStreaks(event, selectedIds);
+    event.games.push(game);
+    return { success: true, game, warning };
+  }
+
   private commitFixedAssignment(
     event: Event,
     eventId: string,
@@ -163,6 +287,7 @@ export class SchedulingService {
       .filter(p => {
         const reg = event.getRegistration(p.id);
         if (!reg || reg.status !== 'WAITING') return false;
+        if (event.isSinglesRoundRobin() && this.isSinglesResting(reg)) return false;
         const priority = this.getPlayerPriority(p.id, event);
         return priority > 0;
       })
@@ -479,6 +604,17 @@ export class SchedulingService {
       return this.commitFixedAssignment(event, eventId, courtId, best);
     }
 
+    if (event.isSinglesRoundRobin()) {
+      if (available.length < 2) {
+        return { success: false, reason: 'No players available to play next game yet', blockingConstraints: ['Need at least 2 waiting players'], shouldWait: true };
+      }
+      const best = this.findBest1v1(available, event);
+      if (!best) {
+        return { success: false, reason: 'Unable to pair waiting players', blockingConstraints: ['Try releasing some players from AWAY/RETIRED'], shouldWait: true };
+      }
+      return this.commitSinglesAssignment(event, eventId, courtId, best);
+    }
+
     if (available.length < 3) {
       return { success: false, reason: 'No players available to play next game yet or unable to do pairing among waiting players', blockingConstraints: ['Insufficient available players'], shouldWait: true };
     }
@@ -563,6 +699,27 @@ export class SchedulingService {
       return { success: false, reason: 'Select two complete teams for manual allotment', blockingConstraints: ['Need 2 fixed teams (4 players)'], shouldWait: true };
     }
 
+    if (event.isSinglesRoundRobin()) {
+      if (team1.length === 1 && team2.length === 1) {
+        const coPlay = this.buildCoPlayCounts(event);
+        const [p1, p2] = [team1[0], team2[0]];
+        const opponentRepeat = this.hasPlayedTogether(p1, p2, event) ? 1 : 0;
+        const rematchCount = this.getCoPlay(coPlay, p1, p2);
+        const assignment: ScoredAssignment = {
+          team1: [...team1],
+          team2: [...team2],
+          partnerRepeats: opponentRepeat,
+          matrixCost: rematchCount,
+          maxCoPlay: rematchCount,
+          zeroPairs: rematchCount === 0 ? 1 : 0,
+          prioritySum: 0,
+          gamesPlayedSum: 0,
+        };
+        return this.commitSinglesAssignment(event, eventId, courtId, assignment);
+      }
+      return { success: false, reason: 'Select one player per side for manual allotment', blockingConstraints: ['Need 2 players (1v1)'], shouldWait: true };
+    }
+
     if (totalSelected >= 4) {
       const coPlay = this.buildCoPlayCounts(event);
       const scored = this.scoreAssignment(team1, team2, event, coPlay);
@@ -613,7 +770,8 @@ export class SchedulingService {
     if (!game) return { success: false, reason: 'Game not found' };
     if (game.completed) return { success: false, reason: 'Game already completed' };
     if (game.started) return { success: false, reason: 'Game has already started' };
-    if (game.players.team1.length !== 2 || game.players.team2.length !== 2) {
+    const requiredSideSize = event.isSinglesRoundRobin() ? 1 : 2;
+    if (game.players.team1.length !== requiredSideSize || game.players.team2.length !== requiredSideSize) {
       for (const pid of [...game.players.team1, ...game.players.team2]) {
         if (event.isFixedPartnerDoubles()) {
           event.setTeamStatus(pid, 'WAITING');
@@ -623,7 +781,12 @@ export class SchedulingService {
         }
       }
       event.games = event.games.filter(g => g.id !== gameId);
-      return { success: false, reason: 'Both teams must have exactly 2 players to start the game', blockingConstraints: ['Team size must be 2v2'] };
+      const sizeLabel = event.isSinglesRoundRobin() ? '1v1' : '2v2';
+      return {
+        success: false,
+        reason: `Both sides must have exactly ${requiredSideSize} player(s) to start the game`,
+        blockingConstraints: [`Team size must be ${sizeLabel}`],
+      };
     }
     if (event.isFixedPartnerDoubles()) {
       if (!event.isRegisteredPair(game.players.team1) || !event.isRegisteredPair(game.players.team2)) {
@@ -693,68 +856,81 @@ export class SchedulingService {
       }
 
       reg.gamesPlayedCount++;
+      if (event.isSinglesRoundRobin()) {
+        reg.consecutiveGamesPlayed = (reg.consecutiveGamesPlayed ?? 0) + 1;
+      }
       if (reg.gamesPlayedCount >= reg.targetGames) {
         reg.status = 'AWAY';
       } else {
         reg.status = 'WAITING';
       }
-      const teammate = allPlayerIds.find(pid => pid !== playerId && team1Ids.has(pid) === team1Ids.has(playerId));
-      if (teammate && !reg.partners.includes(teammate)) {
-        reg.partners.push(teammate);
+      const relatedPlayer = allPlayerIds.find(pid => {
+        if (pid === playerId) return false;
+        if (event.isSinglesRoundRobin()) {
+          return team1Ids.has(pid) !== team1Ids.has(playerId);
+        }
+        return team1Ids.has(pid) === team1Ids.has(playerId);
+      });
+      if (relatedPlayer && !reg.partners.includes(relatedPlayer)) {
+        reg.partners.push(relatedPlayer);
       }
     }
 
     // Priority recency check (Step 6)
     const justFinishedIds = allPlayerIds;
-    const wasBackToBack = new Set<string>();
-    for (const pid of justFinishedIds) {
-      const reg = event.getRegistration(pid);
-      if (reg && this.getPlayerPriority(pid, event) === 7) {
-        wasBackToBack.add(pid);
-      }
-    }
-    for (const pid of justFinishedIds) {
-      const reg = event.getRegistration(pid);
-      if (reg && reg.status === 'WAITING') {
-        if (event.isFixedPartnerDoubles()) {
-          event.syncTeamRegistration(pid, { priority: 5 });
-        } else {
-          reg.priority = 5;
+    if (event.isSinglesRoundRobin()) {
+      this.applySinglesEndGamePriority(event, justFinishedIds);
+    } else {
+      const wasBackToBack = new Set<string>();
+      for (const pid of justFinishedIds) {
+        const reg = event.getRegistration(pid);
+        if (reg && this.getPlayerPriority(pid, event) === 7) {
+          wasBackToBack.add(pid);
         }
       }
-    }
-    const newPlayerCount = event.getAvailablePlayers().filter(p => this.getPlayerPriority(p.id, event) === 10).length;
-    if (newPlayerCount === 0 || newPlayerCount < 3) {
-      const promoteCount = Math.random() < 0.5 ? 1 : 2;
-      let promoted = 0;
-      const promotedIds = new Set<string>();
       for (const pid of justFinishedIds) {
-        if (!wasBackToBack.has(pid)) {
-          const reg = event.getRegistration(pid);
-          if (reg && reg.status === 'WAITING') {
-            if (event.isFixedPartnerDoubles()) {
-              event.syncTeamRegistration(pid, { priority: 7 });
-            } else {
-              reg.priority = 7;
-            }
-            promoted++;
-            promotedIds.add(pid);
-            if (promoted >= promoteCount) break;
+        const reg = event.getRegistration(pid);
+        if (reg && reg.status === 'WAITING') {
+          if (event.isFixedPartnerDoubles()) {
+            event.syncTeamRegistration(pid, { priority: 5 });
+          } else {
+            reg.priority = 5;
           }
         }
       }
-      if (promoted < promoteCount) {
+      const newPlayerCount = event.getAvailablePlayers().filter(p => this.getPlayerPriority(p.id, event) === 10).length;
+      if (newPlayerCount === 0 || newPlayerCount < 3) {
+        const promoteCount = Math.random() < 0.5 ? 1 : 2;
+        let promoted = 0;
+        const promotedIds = new Set<string>();
         for (const pid of justFinishedIds) {
-          if (promotedIds.has(pid)) continue;
-          const reg = event.getRegistration(pid);
-          if (reg && reg.status === 'WAITING') {
-            if (event.isFixedPartnerDoubles()) {
-              event.syncTeamRegistration(pid, { priority: 7 });
-            } else {
-              reg.priority = 7;
+          if (!wasBackToBack.has(pid)) {
+            const reg = event.getRegistration(pid);
+            if (reg && reg.status === 'WAITING') {
+              if (event.isFixedPartnerDoubles()) {
+                event.syncTeamRegistration(pid, { priority: 7 });
+              } else {
+                reg.priority = 7;
+              }
+              promoted++;
+              promotedIds.add(pid);
+              if (promoted >= promoteCount) break;
             }
-            promoted++;
-            if (promoted >= promoteCount) break;
+          }
+        }
+        if (promoted < promoteCount) {
+          for (const pid of justFinishedIds) {
+            if (promotedIds.has(pid)) continue;
+            const reg = event.getRegistration(pid);
+            if (reg && reg.status === 'WAITING') {
+              if (event.isFixedPartnerDoubles()) {
+                event.syncTeamRegistration(pid, { priority: 7 });
+              } else {
+                reg.priority = 7;
+              }
+              promoted++;
+              if (promoted >= promoteCount) break;
+            }
           }
         }
       }

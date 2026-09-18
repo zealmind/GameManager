@@ -156,7 +156,8 @@ function renderCourtSide(label, playerNames, sideClass) {
     `;
 }
 
-function renderCourtMatchSurface(team1Players, team2Players, { empty = false, centerHtml = '' } = {}) {
+function renderCourtMatchSurface(team1Players, team2Players, { empty = false, centerHtml = '', sideLabels = null } = {}) {
+    const labels = sideLabels || { sideA: 'Team 1', sideB: 'Team 2' };
     if (empty) {
         return `
             <div class="court-match court-match--empty">
@@ -174,14 +175,14 @@ function renderCourtMatchSurface(team1Players, team2Players, { empty = false, ce
     return `
         <div class="court-match">
             <div class="court-play">
-                ${renderCourtSide('Team 1', team1Players, 'court-side-a')}
+                ${renderCourtSide(labels.sideA, team1Players, 'court-side-a')}
                 <div class="court-kitchen" aria-hidden="true"></div>
                 <div class="court-divider">
                     ${centerHtml || '<div class="court-net-badge">NET</div>'}
                     <div class="court-net-post" aria-hidden="true"></div>
                 </div>
                 <div class="court-kitchen" aria-hidden="true"></div>
-                ${renderCourtSide('Team 2', team2Players, 'court-side-b')}
+                ${renderCourtSide(labels.sideB, team2Players, 'court-side-b')}
             </div>
         </div>
     `;
@@ -455,6 +456,33 @@ function getGamePlayerDisplayName(playerId, status, nickNameMap) {
 
 function isFixedPartnerEvent(eventOrStatus) {
     return (eventOrStatus?.format || 'ROTATING_DOUBLES') === 'FIXED_PARTNER_DOUBLES';
+}
+
+function isSinglesEvent(eventOrStatus) {
+    return (eventOrStatus?.format || 'ROTATING_DOUBLES') === 'SINGLES_ROUND_ROBIN';
+}
+
+function getEventFormatLabel(eventOrStatus) {
+    if (isFixedPartnerEvent(eventOrStatus)) return 'Fixed partners';
+    if (isSinglesEvent(eventOrStatus)) return 'Singles';
+    return 'Rotating';
+}
+
+function getCourtSideLabels(eventOrStatus) {
+    if (isSinglesEvent(eventOrStatus)) {
+        return { sideA: 'Player A', sideB: 'Player B' };
+    }
+    return { sideA: 'Team 1', sideB: 'Team 2' };
+}
+
+function getMatchupMetaLabel(eventOrStatus) {
+    if (isFixedPartnerEvent(eventOrStatus)) return 'Team Matchups';
+    if (isSinglesEvent(eventOrStatus)) return 'Who Played Against Who';
+    return 'Who Played with Who';
+}
+
+function getRelatedPlayersLabel(eventOrStatus) {
+    return isSinglesEvent(eventOrStatus) ? 'Opponents' : 'Partners';
 }
 
 function getEventTeams(status) {
@@ -1123,7 +1151,7 @@ async function loadEventsList() {
             <div class="list-item" data-event-id="${e.id}">
                 <div style="flex:1">
                     <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
-                    <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${isFixedPartnerEvent(e) ? 'Fixed partners' : 'Rotating'} | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
+                    <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${getEventFormatLabel(e)} | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
                 <div class="list-item-actions">${actionHtml}</div>
             </div>
@@ -1199,6 +1227,7 @@ function openCreateEventModal() {
                     <select name="format" id="event-format-select">
                         <option value="ROTATING_DOUBLES">Rotating Doubles</option>
                         <option value="FIXED_PARTNER_DOUBLES">Fixed Partner Doubles</option>
+                        <option value="SINGLES_ROUND_ROBIN">Singles Round Robin</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -1223,6 +1252,9 @@ function openCreateEventModal() {
             ? 'Allowed number of Games per team'
             : 'Allowed number of Games per player';
     });
+    gamesPerLabel.textContent = formatSelect.value === 'FIXED_PARTNER_DOUBLES'
+        ? 'Allowed number of Games per team'
+        : 'Allowed number of Games per player';
 
     document.getElementById('create-event-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -1600,6 +1632,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
     const maxCourt = event.courts || 1;
     const playerStatusMap = new Map(status.players.map(p => [p.id, p.status]));
     const nickMap = buildNickNameMap(status.players);
+    const courtSideLabels = getCourtSideLabels(status);
     let courtsHtml = '';
     status.courts.forEach(court => {
         const deadlockError = deadlockCourtErrors.get(court.courtId);
@@ -1640,7 +1673,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
             courtsHtml += `
                 <div class="game-card court-game-card" data-game-id="${g.id}">
                     ${allotmentWarning ? `<div class="court-allot-warning">${escapeHtml(allotmentWarning)}</div>` : ''}
-                    ${renderCourtMatchSurface(team1Players, team2Players)}
+                    ${renderCourtMatchSurface(team1Players, team2Players, { sideLabels: courtSideLabels })}
                     <div class="court-footer">
                         <button class="btn btn-success btn-sm start-game-btn" data-game-id="${g.id}">Start Game</button>
                         <button class="btn btn-secondary btn-sm cancel-allot-btn" data-court-id="${court.courtId}">Cancel Allotment</button>
@@ -1659,6 +1692,7 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                 <div class="game-card court-game-card" data-game-id="${g.id}" data-court-id="${court.courtId}">
                     <div class="court-scores" data-game-id="${g.id}">
                         ${renderCourtMatchSurface(team1Players, team2Players, {
+                            sideLabels: courtSideLabels,
                             centerHtml: `
                                 <div class="court-score-compact">
                                     <button type="button" class="court-score-display" data-game-id="${g.id}" title="Edit score" aria-label="Edit score">
@@ -1825,8 +1859,8 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                     return `
                     <div class="game-card completed-game-card${isEditing ? ' is-editing-score' : ''}" data-game-id="${g.id}">
                         <div class="game-teams">
-                            <div class="game-team">Team 1: ${fixed ? getTeamGamePlayerDisplayName(g.players.team1, status, nickNameMap) : g.players.team1.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
-                            <div class="game-team">Team 2: ${fixed ? getTeamGamePlayerDisplayName(g.players.team2, status, nickNameMap) : g.players.team2.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
+                            <div class="game-team">${courtSideLabels.sideA}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team1, status, nickNameMap) : g.players.team1.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
+                            <div class="game-team">${courtSideLabels.sideB}: ${fixed ? getTeamGamePlayerDisplayName(g.players.team2, status, nickNameMap) : g.players.team2.map(id => getGamePlayerDisplayName(id, status, nickNameMap)).join(', ')}</div>
                             <div class="game-status status-completed">Game #${g.gameNumber}</div>
                             <div class="game-meta">
                                 court ${g.courtId} | ${g.startedAt ? `Start: ${new Date(g.startedAt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : ''}
@@ -2133,7 +2167,7 @@ function bindCollapsibleSections(eventId, status) {
             toggleId: 'played-with-toggle',
             collapsedClass: 'played-with-collapsed',
             storageKey: `gm_event_${eventId}_playedwith_collapsed`,
-            label: isFixedPartnerEvent(status) ? 'Team Matchups' : 'Who Played with Who',
+            label: getMatchupMetaLabel(status),
             defaultCollapsed: status.isStarted ? true : null,
         },
     ];
@@ -2394,7 +2428,7 @@ function renderLeaderboardRow(entry, idx, stats, nickNameMap, playerStatusMap, s
         : getPlayerDisplayName(entry, nickNameMap, true, playerStatusMap);
     const meta = isTeam
         ? `Games: ${entry.gamesPlayed || 0}`
-        : `Games: ${entry.gamesPlayed} | Partners: ${(entry.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None'}`;
+        : `Games: ${entry.gamesPlayed} | ${getRelatedPlayersLabel(status)}: ${(entry.partnerIds || []).map(pid => getPlayerNickName(pid, nickNameMap)).filter(n => n).join(', ') || 'None'}`;
     return `
         <div class="leaderboard-row">
             ${getLeaderboardRankBadge(idx)}
@@ -2634,6 +2668,9 @@ function buildDuprSheetRows(event, status, completedGames) {
         };
     };
 
+    const isSingles = isSinglesEvent(status);
+    const matchType = isSingles ? 'S' : 'D';
+
     const rows = (completedGames || []).map(g => {
         const team1 = g.players?.team1 || [];
         const team2 = g.players?.team2 || [];
@@ -2644,20 +2681,20 @@ function buildDuprSheetRows(event, status, completedGames) {
         const scoreA = g.scores?.[0];
         const scoreB = g.scores?.[1];
         return excelRow([
-            excelCell('D'),
+            excelCell(matchType),
             excelCell(eventName),
             excelCell(date),
             excelCell(a1.name),
             excelCell(a1.duprId),
             excelCell(''),
-            excelCell(a2.name),
-            excelCell(a2.duprId),
+            excelCell(isSingles ? '' : a2.name),
+            excelCell(isSingles ? '' : a2.duprId),
             excelCell(''),
             excelCell(b1.name),
             excelCell(b1.duprId),
             excelCell(''),
-            excelCell(b2.name),
-            excelCell(b2.duprId),
+            excelCell(isSingles ? '' : b2.name),
+            excelCell(isSingles ? '' : b2.duprId),
             excelCell(''),
             excelCell(scoreA ?? '', scoreA != null ? 'Number' : 'String'),
             excelCell(scoreB ?? '', scoreB != null ? 'Number' : 'String'),
@@ -3800,13 +3837,26 @@ function computePlayedWithMatrix(event) {
 
     const n = playerIds.length;
     const matrix = Array.from({ length: n }, () => Array(n).fill(0));
+    const singlesMatrix = isSinglesEvent(event);
 
     for (const game of gameHistory) {
-        const gamePlayers = [
-            ...(game.players?.team1 || []),
-            ...(game.players?.team2 || [])
-        ];
+        const team1 = game.players?.team1 || [];
+        const team2 = game.players?.team2 || [];
 
+        if (singlesMatrix) {
+            for (const p of team1) {
+                for (const q of team2) {
+                    const idxP = indexMap.get(p);
+                    const idxQ = indexMap.get(q);
+                    if (idxP === undefined || idxQ === undefined) continue;
+                    matrix[idxP][idxQ]++;
+                    matrix[idxQ][idxP]++;
+                }
+            }
+            continue;
+        }
+
+        const gamePlayers = [...team1, ...team2];
         for (const p of gamePlayers) {
             const idxP = indexMap.get(p);
             if (idxP === undefined) continue;
@@ -3912,6 +3962,54 @@ function openManualAllotModal(eventId, courtId) {
 
             renderTeamOptions();
             teamSelects.forEach(select => select.addEventListener('change', renderTeamOptions));
+            return;
+        }
+
+        if (isSinglesEvent(status)) {
+            const sideLabels = getCourtSideLabels(status);
+            formBody.innerHTML = `
+                <div class="team-section">
+                    <div class="team-title">${sideLabels.sideA}</div>
+                    <div class="form-group">
+                        <label>Select Player</label>
+                        <select class="manual-allot-select" data-team="1" data-slot="0"></select>
+                    </div>
+                </div>
+                <div class="team-divider"></div>
+                <div class="team-section">
+                    <div class="team-title">${sideLabels.sideB}</div>
+                    <div class="form-group">
+                        <label>Select Player</label>
+                        <select class="manual-allot-select" data-team="2" data-slot="0"></select>
+                    </div>
+                </div>
+                <div id="manual-allot-error" class="manual-allot-error" style="display:none;"></div>
+                <button type="button" class="btn btn-success" id="confirm-manual-allot">Confirm Allotment</button>
+                <button type="button" class="btn btn-secondary mt-1" id="cancel-manual-allot">Cancel</button>
+            `;
+
+            const waiting = status.players.filter(p => p.status === 'WAITING');
+            const nickNameMap = buildNickNameMap(status.players);
+            const selects = overlay.querySelectorAll('.manual-allot-select');
+
+            function renderSinglesOptions() {
+                const selected = new Set(Array.from(selects).map(s => s.value).filter(Boolean));
+                selects.forEach(select => {
+                    const current = select.value;
+                    const team = select.dataset.team;
+                    const options = waiting
+                        .filter(p => !selected.has(p.id) || p.id === current)
+                        .map(p => {
+                            const label = getPlayerLabel(p, nickNameMap);
+                            return `<option value="${p.id}" ${p.id === current ? 'selected' : ''}>${label}</option>`;
+                        })
+                        .join('');
+                    select.innerHTML = '<option value="">-- Select Player --</option>' + options;
+                });
+            }
+
+            renderSinglesOptions();
+            selects.forEach(select => select.addEventListener('change', renderSinglesOptions));
             return;
         }
 
@@ -4024,19 +4122,44 @@ function openManualAllotModal(eventId, courtId) {
             team1 = [...t1.playerIds];
             team2 = [...t2.playerIds];
         } else {
-            const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
-            const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
-            team1 = team1Slots.map(s => s?.value).filter(Boolean);
-            team2 = team2Slots.map(s => s?.value).filter(Boolean);
-            const missing = [];
-            if (team1.length + team2.length < 1) missing.push('Select at least 1 player');
-            if (new Set([...team1, ...team2]).size !== team1.length + team2.length) missing.push('All players must be distinct');
-            if (missing.length) {
-                if (errorEl) {
-                    errorEl.textContent = missing.join(', ');
-                    errorEl.style.display = 'block';
+            const singlesSelects = overlay.querySelectorAll('.manual-allot-select[data-slot="0"]');
+            const doublesSelects = overlay.querySelectorAll('.manual-allot-select');
+            const isSinglesForm = singlesSelects.length === 2 && doublesSelects.length === 2;
+
+            if (isSinglesForm) {
+                const p1 = overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]')?.value;
+                const p2 = overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]')?.value;
+                if (!p1 || !p2) {
+                    if (errorEl) {
+                        errorEl.textContent = 'Select one player per side';
+                        errorEl.style.display = 'block';
+                    }
+                    return;
                 }
-                return;
+                if (p1 === p2) {
+                    if (errorEl) {
+                        errorEl.textContent = 'Players must be distinct';
+                        errorEl.style.display = 'block';
+                    }
+                    return;
+                }
+                team1 = [p1];
+                team2 = [p2];
+            } else {
+                const team1Slots = [overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="1"][data-slot="1"]')];
+                const team2Slots = [overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="0"]'), overlay.querySelector('.manual-allot-select[data-team="2"][data-slot="1"]')];
+                team1 = team1Slots.map(s => s?.value).filter(Boolean);
+                team2 = team2Slots.map(s => s?.value).filter(Boolean);
+                const missing = [];
+                if (team1.length + team2.length < 1) missing.push('Select at least 1 player');
+                if (new Set([...team1, ...team2]).size !== team1.length + team2.length) missing.push('All players must be distinct');
+                if (missing.length) {
+                    if (errorEl) {
+                        errorEl.textContent = missing.join(', ');
+                        errorEl.style.display = 'block';
+                    }
+                    return;
+                }
             }
         }
 

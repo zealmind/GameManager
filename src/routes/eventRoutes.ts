@@ -8,7 +8,7 @@ import { withEventAccess, loadEvent } from '../middleware/eventAccess';
 const router = Router();
 const db = Database.getInstance();
 
-const VALID_EVENT_FORMATS: EventFormat[] = ['ROTATING_DOUBLES', 'FIXED_PARTNER_DOUBLES'];
+const VALID_EVENT_FORMATS: EventFormat[] = ['ROTATING_DOUBLES', 'FIXED_PARTNER_DOUBLES', 'SINGLES_ROUND_ROBIN'];
 
 function prepareEventResponse(event: Event) {
   const ev = event as any;
@@ -47,7 +47,7 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
     }
     const eventFormat: EventFormat = format || 'ROTATING_DOUBLES';
     if (!VALID_EVENT_FORMATS.includes(eventFormat)) {
-      return res.status(400).json({ error: 'Invalid format. Must be ROTATING_DOUBLES or FIXED_PARTNER_DOUBLES' });
+      return res.status(400).json({ error: 'Invalid format. Must be ROTATING_DOUBLES, FIXED_PARTNER_DOUBLES, or SINGLES_ROUND_ROBIN' });
     }
     const ownerId = req.user!.id;
     const event = await db.createEvent(name, totalGamesToPlay, numCourts, ownerId, eventFormat);
