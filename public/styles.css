@@ -549,8 +549,15 @@ body.hide-bottom-nav .bottom-nav {
 
 .game-score-row {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 4px;
+}
+
+.game-score-stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-width: 2.4em;
 }
 
 .game-score-edit {
@@ -565,6 +572,30 @@ body.hide-bottom-nav .bottom-nav {
     font-size: 11px;
     color: var(--text-secondary);
     text-align: center;
+}
+
+.game-result-thumb {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    margin-top: 2px;
+    line-height: 1;
+    font-weight: 800;
+}
+
+.game-result-thumb svg {
+    display: block;
+    stroke: currentColor;
+    stroke-width: 1.25;
+    stroke-linejoin: round;
+}
+
+.game-result-win {
+    color: var(--success);
+}
+
+.game-result-loss {
+    color: var(--danger);
 }
 
 .game-status {

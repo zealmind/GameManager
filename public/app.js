@@ -19,6 +19,9 @@ let editingCourtScoreGameId = null;
 /** Snapshot of scores when court editor opened (for discard). */
 let courtScoreEditSnapshot = null;
 
+const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2 10h5v12H2zM9 22h8.2c1 0 1.9-.7 2.1-1.7l1.5-8.2c.3-1.4-.8-2.6-2.2-2.6H14V5.2C14 3.4 12.6 2 10.8 2c-.3 0-.6.2-.7.5L7.3 9.2A3 3 0 0 0 9 11.2V22z"/></svg>';
+const THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 14h-5V2h5zM15 2H6.8c-1 0-1.9.7-2.1 1.7L3.2 11.9c-.3 1.4.8 2.6 2.2 2.6H10v4.3C10 20.6 11.4 22 13.2 22c.3 0 .6-.2.7-.5l2.8-6.7A3 3 0 0 0 15 12.8V2z"/></svg>';
+
 function getGameLocalScore(gameId, teamIndex) {
     const entry = localGameScores.get(gameId);
     if (entry !== undefined) {
@@ -1994,6 +1997,18 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                         const local2 = getGameLocalScore(g.id, 1);
                         const score1 = local1 !== null ? local1 : (g.scores ? g.scores[0] : 0);
                         const score2 = local2 !== null ? local2 : (g.scores ? g.scores[1] : 0);
+                        let resultBadge = '';
+                        if (currentCompletedGamesFilter) {
+                            const onTeam1 = fixed
+                                ? teamKeyFromPlayerIds(g.players.team1 || []) === currentCompletedGamesFilter
+                                : (g.players.team1 || []).includes(currentCompletedGamesFilter);
+                            if (score1 !== score2) {
+                                const won = onTeam1 ? score1 > score2 : score2 > score1;
+                                resultBadge = won
+                                    ? `<span class="game-result-thumb game-result-win" title="Won" aria-label="Won">${THUMB_UP_SVG}</span>`
+                                    : `<span class="game-result-thumb game-result-loss" title="Lost" aria-label="Lost">${THUMB_DOWN_SVG}</span>`;
+                            }
+                        }
                         return `
                         <div class="game-card completed-game-card${isEditing ? ' is-editing-score' : ''}" data-game-id="${g.id}">
                             <div class="game-teams">
@@ -2008,7 +2023,10 @@ function renderGamePhase(event, status, activeGames, completedGames, fromShare =
                             </div>
                             <div class="game-score-side">
                                 <div class="game-score-row${isEditing ? ' hidden' : ''}" data-game-id="${g.id}">
-                                    <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
+                                    <div class="game-score-stack">
+                                        <span class="game-score">${g.scores?.[0] || 0}-${g.scores?.[1] || 0}</span>
+                                        ${resultBadge}
+                                    </div>
                                     <button class="btn btn-secondary btn-sm edit-score-btn" data-game-id="${g.id}">Edit Score</button>
                                 </div>
                                 <div class="game-score-edit${isEditing ? '' : ' hidden'}" data-game-id="${g.id}">
