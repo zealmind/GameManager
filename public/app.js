@@ -2169,7 +2169,7 @@ async function openPlayedWithFullscreen(event) {
     const existing = document.getElementById('played-with-fullscreen');
     if (existing) existing.remove();
 
-    const { playerIds, matrix, players, isTeamMatrix } = computePlayedWithMatrix(event);
+    const { playerIds, matrix, players, isTeamMatrix, labels } = computePlayedWithMatrix(event);
     if (playerIds.length === 0) return;
 
     const matrixTitle = isTeamMatrix ? 'Team Matchups' : 'Who Played with Who';
@@ -2304,14 +2304,18 @@ function bindLeaderboardExpand(eventId) {
 function getEventDetailTabs(event, status, fromShare = false) {
     const tabs = [];
     if (status.isStarted && !status.isEnded && !fromShare) {
-        tabs.push({ id: 'field', label: 'Field' });
+        tabs.push({ id: 'field', label: 'Courts', icon: '🏟️' });
     }
     if (status.isStarted) {
-        tabs.push({ id: 'leaderboard', label: 'Rank' });
-        tabs.push({ id: 'players', label: isFixedPartnerEvent(status) ? 'Teams' : 'Players' });
-        tabs.push({ id: 'stats', label: 'Stats' });
+        tabs.push({ id: 'leaderboard', label: 'Rank', icon: '🏆' });
+        tabs.push({
+            id: 'players',
+            label: isFixedPartnerEvent(status) ? 'Teams' : 'Players',
+            icon: isFixedPartnerEvent(status) ? '👫' : '👥',
+        });
+        tabs.push({ id: 'stats', label: 'Games', icon: '📊' });
         if (document.querySelector('[data-tab-panel="matchups"]')) {
-            tabs.push({ id: 'matchups', label: 'Played' });
+            tabs.push({ id: 'matchups', label: 'Played', icon: '🤝' });
         }
     }
     return tabs;
@@ -2361,7 +2365,10 @@ function bindEventDetailTabs(event, status, fromShare = false) {
 
     tabsEl.hidden = false;
     tabsEl.innerHTML = tabs.map(tab => `
-        <button type="button" class="event-tab" role="tab" data-tab="${tab.id}" aria-selected="false" tabindex="-1">${escapeHtml(tab.label)}</button>
+        <button type="button" class="event-tab" role="tab" data-tab="${tab.id}" aria-selected="false" tabindex="-1">
+            <span class="event-tab-icon" aria-hidden="true">${tab.icon}</span>
+            <span class="event-tab-label">${escapeHtml(tab.label)}</span>
+        </button>
     `).join('');
 
     tabsEl.querySelectorAll('[data-tab]').forEach(btn => {
