@@ -18,6 +18,9 @@ let editingCompletedScoreGameId = null;
 let editingCourtScoreGameId = null;
 /** Snapshot of scores when court editor opened (for discard). */
 let courtScoreEditSnapshot = null;
+/** Native Game Stats <select> pickers often blur while open; pause polls until this time. */
+let gameStatsFilterBusyUntil = 0;
+const GAME_STATS_FILTER_BUSY_MS = 30000;
 
 const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2 10h5v12H2zM9 22h8.2c1 0 1.9-.7 2.1-1.7l1.5-8.2c.3-1.4-.8-2.6-2.2-2.6H14V5.2C14 3.4 12.6 2 10.8 2c-.3 0-.6.2-.7.5L7.3 9.2A3 3 0 0 0 9 11.2V22z"/></svg>';
 const THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 14h-5V2h5zM15 2H6.8c-1 0-1.9.7-2.1 1.7L3.2 11.9c-.3 1.4.8 2.6 2.2 2.6H10v4.3C10 20.6 11.4 22 13.2 22c.3 0 .6-.2.7-.5l2.8-6.7A3 3 0 0 0 15 12.8V2z"/></svg>';
@@ -43,6 +46,39 @@ function isScoreEditingActive() {
     if (editingCompletedScoreGameId || editingCourtScoreGameId) return true;
     const el = document.activeElement;
     return !!(el && el.classList?.contains('score-input') && el.closest('#event-detail'));
+}
+
+function markGameStatsFilterBusy() {
+    gameStatsFilterBusyUntil = Date.now() + GAME_STATS_FILTER_BUSY_MS;
+}
+
+function clearGameStatsFilterBusy() {
+    gameStatsFilterBusyUntil = 0;
+}
+
+function isGameStatsFilterActive() {
+    if (Date.now() < gameStatsFilterBusyUntil) return true;
+    const el = document.activeElement;
+    return !!(el && el.id === 'completed-games-player-filter');
+}
+
+function bindCompletedGamesPlayerFilter(eventId) {
+    const completedGamesFilter = document.getElementById('completed-games-player-filter');
+    if (!completedGamesFilter) return;
+    const markBusy = () => markGameStatsFilterBusy();
+    completedGamesFilter.addEventListener('pointerdown', markBusy);
+    completedGamesFilter.addEventListener('focus', markBusy);
+    completedGamesFilter.addEventListener('keydown', markBusy);
+    completedGamesFilter.addEventListener('change', (e) => {
+        clearGameStatsFilterBusy();
+        currentCompletedGamesFilter = e.target.value;
+        loadEventDetail(eventId);
+    });
+}
+
+/** Skip background refresh while the user is editing scores or choosing a Game Stats player. */
+function shouldSkipEventDetailRefresh() {
+    return isScoreEditingActive() || isGameStatsFilterActive();
 }
 
 /**
@@ -1600,10 +1636,10 @@ async function openEventDetail(eventId, fromShare = false) {
     document.getElementById('back-btn').addEventListener('click', () => switchView('dashboard'));
     await loadEventDetail(eventId);
 
-    // Auto-refresh event details every 5 seconds (skip while editing scores)
+    // Auto-refresh event details every 5 seconds (skip while editing scores or filtering Game Stats)
     if (eventDetailPollInterval) clearInterval(eventDetailPollInterval);
     eventDetailPollInterval = setInterval(() => {
-        if (currentEventId && !isScoreEditingActive()) {
+        if (currentEventId && !shouldSkipEventDetailRefresh()) {
             loadEventDetail(currentEventId, false, { silent: true });
         }
     }, 5000);
@@ -1666,6 +1702,11 @@ async function loadEventDetail(eventId, fromShare = false, options = {}) {
             phaseHtml = renderRegistrationPhase(event, status);
         } else {
             phaseHtml = renderGamePhase(event, status, activeGames, completedGames, fromShare);
+        }
+
+        // Poll may have started before the user opened the Game Stats filter or a score field.
+        if (silent && shouldSkipEventDetailRefresh()) {
+            return;
         }
 
         const activeEl = document.activeElement;
@@ -3016,13 +3057,7 @@ function bindEventDetailActions(eventId, event, status) {
         });
 
         // Still bind the read-only interactive controls for viewers
-        const completedGamesFilter = document.getElementById('completed-games-player-filter');
-        if (completedGamesFilter) {
-            completedGamesFilter.addEventListener('change', (e) => {
-                currentCompletedGamesFilter = e.target.value;
-                loadEventDetail(eventId);
-            });
-        }
+        bindCompletedGamesPlayerFilter(eventId);
         return;
     }
 
@@ -3341,13 +3376,7 @@ function bindEventDetailActions(eventId, event, status) {
         });
     });
 
-    const completedGamesFilter = document.getElementById('completed-games-player-filter');
-    if (completedGamesFilter) {
-        completedGamesFilter.addEventListener('change', (e) => {
-            currentCompletedGamesFilter = e.target.value;
-            loadEventDetail(eventId);
-        });
-    }
+    bindCompletedGamesPlayerFilter(eventId);
 }
 
 async function scheduleGame(eventId) {
