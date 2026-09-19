@@ -81,6 +81,7 @@ class MockClient {
         endedAt: args[5],
         owner_id: args[6],
         format: args[7] ?? 'ROTATING_DOUBLES',
+        createdAt: args[8] ?? null,
       };
     }
     if (table === 'registrations') {

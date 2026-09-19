@@ -29,6 +29,7 @@ export class Event {
   totalGamesToPlay: number;
   gameHistory: Game[]; // completed games
   nextGameNumber: number;
+  createdAt: Date;
   startedAt?: Date;
   endedAt?: Date;
   sharedAccess: Array<{ token: string; permission: 'viewer' | 'moderator'; invitedBy: string; createdAt: string }>;
@@ -44,6 +45,7 @@ export class Event {
     this.totalGamesToPlay = totalGamesToPlay;
     this.gameHistory = []; // completed games
     this.nextGameNumber = 1;
+    this.createdAt = new Date();
     this.sharedAccess = [];
   }
 

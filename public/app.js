@@ -21,6 +21,7 @@ let courtScoreEditSnapshot = null;
 
 const THUMB_UP_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M2 10h5v12H2zM9 22h8.2c1 0 1.9-.7 2.1-1.7l1.5-8.2c.3-1.4-.8-2.6-2.2-2.6H14V5.2C14 3.4 12.6 2 10.8 2c-.3 0-.6.2-.7.5L7.3 9.2A3 3 0 0 0 9 11.2V22z"/></svg>';
 const THUMB_DOWN_SVG = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M22 14h-5V2h5zM15 2H6.8c-1 0-1.9.7-2.1 1.7L3.2 11.9c-.3 1.4.8 2.6 2.2 2.6H10v4.3C10 20.6 11.4 22 13.2 22c.3 0 .6-.2.7-.5l2.8-6.7A3 3 0 0 0 15 12.8V2z"/></svg>';
+const ENDED_EVENT_LOCK_SVG = '<svg class="event-ended-lock-icon" viewBox="0 0 24 24" width="44" height="44" aria-hidden="true"><path fill="currentColor" d="M17 8h-1V6a4 4 0 0 0-8 0v2H7a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2zm-3-2a2 2 0 0 1 4 0v2h-4V6zm-1 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>';
 
 function getGameLocalScore(gameId, teamIndex) {
     const entry = localGameScores.get(gameId);
@@ -471,6 +472,52 @@ function getEventFormatLabel(eventOrStatus) {
     if (isFixedPartnerEvent(eventOrStatus)) return 'Fixed partners';
     if (isSinglesEvent(eventOrStatus)) return 'Singles';
     return 'Rotating';
+}
+
+function getEventListStatus(event) {
+    if (event?.endedAt) return 'ended';
+    if (event?.startedAt) return 'active';
+    return 'upcoming';
+}
+
+function eventListRecency(event) {
+    const raw = event?.createdAt || event?.startedAt || event?.endedAt;
+    const t = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(t) ? t : 0;
+}
+
+function formatEventCreatedAt(event) {
+    const raw = event?.createdAt || event?.startedAt;
+    if (!raw) return '';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime()) || d.getTime() === 0) return '';
+    return d.toLocaleString([], {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+    });
+}
+
+const EVENT_LIST_GROUPS = [
+    { key: 'active', label: 'Active' },
+    { key: 'upcoming', label: 'Not started' },
+    { key: 'ended', label: 'Ended' },
+];
+
+function groupEventsByStatus(events) {
+    const groups = new Map(EVENT_LIST_GROUPS.map(g => [g.key, []]));
+    for (const event of events) {
+        const status = getEventListStatus(event);
+        groups.get(status)?.push(event);
+    }
+    for (const list of groups.values()) {
+        list.sort((a, b) => eventListRecency(b) - eventListRecency(a));
+    }
+    return EVENT_LIST_GROUPS
+        .map(g => ({ ...g, events: groups.get(g.key) || [] }))
+        .filter(g => g.events.length > 0);
 }
 
 function getCourtSideLabels(eventOrStatus) {
@@ -1137,7 +1184,7 @@ async function loadEventsList() {
             return;
         }
         const sharedIds = new Set((sharedEvents || []).map(e => e.id));
-        container.innerHTML = allEvents.map(e => {
+        const renderEventCard = (e) => {
             const isShared = sharedIds.has(e.id) || (e.sharedAccess && e.sharedAccess.length > 0);
             const isOwner = currentUser && e.ownerId === currentUser.id;
             let actionHtml = '';
@@ -1154,16 +1201,29 @@ async function loadEventsList() {
             } else {
                 actionHtml = '<span class="text-muted" style="font-size:11px;">Shared</span>';
             }
+            const lifecycle = getEventListStatus(e);
+            const statusLabel = lifecycle === 'active' ? 'Active' : lifecycle === 'ended' ? 'Ended' : 'Not started';
+            const createdLabel = formatEventCreatedAt(e);
+            const endedOverlay = lifecycle === 'ended'
+                ? `<div class="event-ended-lock-overlay" aria-hidden="true">${ENDED_EVENT_LOCK_SVG}</div>`
+                : '';
             return `
-            <div class="list-item" data-event-id="${e.id}">
+            <div class="list-item event-status-${lifecycle}" data-event-id="${e.id}">
+                ${endedOverlay}
                 <div style="flex:1">
-                    <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''}</div>
-                    <div class="list-item-meta">ID: ${e.id.slice(0,8)}... | ${getEventFormatLabel(e)} | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
+                    <div class="list-item-title">${escapeHtml(e.name)}${isShared ? ' <span class="shared-badge">Shared</span>' : ''} <span class="event-status-badge event-status-badge-${lifecycle}">${statusLabel}</span></div>
+                    <div class="list-item-meta">${createdLabel ? `Created ${createdLabel} | ` : ''}${getEventFormatLabel(e)} | ${e.totalGamesToPlay} games | ${e.courts || 0} courts</div>
                 </div>
                 <div class="list-item-actions">${actionHtml}</div>
             </div>
         `;
-        }).join('');
+        };
+        container.innerHTML = groupEventsByStatus(allEvents).map(group => `
+            <section class="events-list-group">
+                <h3 class="events-list-group-title events-list-group-title-${group.key}">${group.label}</h3>
+                ${group.events.map(renderEventCard).join('')}
+            </section>
+        `).join('');
         container.querySelectorAll('.list-item').forEach(item => {
             item.addEventListener('click', (e) => {
                 if (e.target.closest('.list-item-actions')) return;

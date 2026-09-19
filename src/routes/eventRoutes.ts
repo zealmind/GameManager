@@ -25,6 +25,15 @@ function parsePositiveInt(value: unknown): number | undefined | 'invalid' {
   return n;
 }
 
+function sortEventsNewestFirst<T extends { createdAt?: Date | string; startedAt?: Date | string; endedAt?: Date | string }>(events: T[]): T[] {
+  const recency = (e: T) => {
+    const raw = e.createdAt || e.startedAt || e.endedAt;
+    const t = raw ? new Date(raw).getTime() : 0;
+    return Number.isFinite(t) ? t : 0;
+  };
+  return [...events].sort((a, b) => recency(b) - recency(a));
+}
+
 function prepareEventResponse(event: Event) {
   const ev = event as any;
   return {
@@ -33,6 +42,7 @@ function prepareEventResponse(event: Event) {
     format: event.format,
     courts: event.courts,
     totalGamesToPlay: event.totalGamesToPlay,
+    createdAt: event.createdAt,
     startedAt: event.startedAt,
     endedAt: event.endedAt,
     ownerId: ev.ownerId,
@@ -75,7 +85,7 @@ router.post('/', authenticate, async (req: AuthenticatedRequest, res) => {
 // GET /events - List my events + events I moderate
 router.get('/', authenticate, (req: AuthenticatedRequest, res) => {
   try {
-    const events = db.getEventsForUser(req.user!.id);
+    const events = sortEventsNewestFirst(db.getEventsForUser(req.user!.id));
     res.json(events.map(prepareEventResponse));
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });
@@ -85,7 +95,7 @@ router.get('/', authenticate, (req: AuthenticatedRequest, res) => {
 // GET /events/shared - List events shared with me (I am not the owner)
 router.get('/shared', authenticate, (req: AuthenticatedRequest, res) => {
   try {
-    const events = db.getModeratedEvents(req.user!.id);
+    const events = sortEventsNewestFirst(db.getModeratedEvents(req.user!.id));
     res.json(events.map(prepareEventResponse));
   } catch (err) {
     res.status(500).json({ error: 'Internal server error' });

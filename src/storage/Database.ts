@@ -62,6 +62,7 @@ export class Database {
         totalGamesToPlay INTEGER NOT NULL,
         startedAt TEXT,
         endedAt TEXT,
+        createdAt TEXT,
         owner_id TEXT
       );
       CREATE TABLE IF NOT EXISTS registrations (
@@ -103,6 +104,7 @@ export class Database {
     await this.migrateAddEventFormat();
     await this.migrateAddFixedPartnerId();
     await this.migrateAddConsecutiveGamesPlayed();
+    await this.migrateAddEventCreatedAt();
     await this.load();
   }
 
@@ -147,6 +149,22 @@ export class Database {
       );
     } catch {
       // column already exists
+    }
+  }
+
+  private async migrateAddEventCreatedAt(): Promise<void> {
+    try {
+      await this.client.execute('ALTER TABLE events ADD COLUMN createdAt TEXT');
+    } catch {
+      // column already exists
+    }
+    try {
+      await this.client.execute(
+        `UPDATE events SET createdAt = COALESCE(createdAt, startedAt, endedAt)
+         WHERE createdAt IS NULL OR createdAt = ''`
+      );
+    } catch {
+      // ignore backfill failures on empty/new databases
     }
   }
 
@@ -350,8 +368,8 @@ export class Database {
     }
 
     stmts.push({
-      sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      sql: `INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format, createdAt)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               courts = excluded.courts,
@@ -359,7 +377,8 @@ export class Database {
               startedAt = excluded.startedAt,
               endedAt = excluded.endedAt,
               owner_id = excluded.owner_id,
-              format = excluded.format`,
+              format = excluded.format,
+              createdAt = excluded.createdAt`,
       args: [
         event.id,
         event.name,
@@ -369,6 +388,7 @@ export class Database {
         event.endedAt ? event.endedAt.toISOString() : null,
         (event as any).ownerId || null,
         event.format || 'ROTATING_DOUBLES',
+        event.createdAt ? event.createdAt.toISOString() : new Date().toISOString(),
       ],
     });
 
@@ -445,7 +465,7 @@ export class Database {
       }
 
       const eventRows = await this.client.execute(
-        'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format FROM events'
+        'SELECT id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format, createdAt FROM events'
       );
       const regRows = await this.client.execute(
         'SELECT eventId, playerId, gamesPlayedCount, status, targetGames, partners, priority, nick_name, fixed_partner_id, consecutive_games_played FROM registrations'
@@ -532,6 +552,9 @@ export class Database {
         event.id = row.id;
         event.startedAt = row.startedAt ? new Date(row.startedAt) : undefined;
         event.endedAt = row.endedAt ? new Date(row.endedAt) : undefined;
+        event.createdAt = row.createdAt
+          ? new Date(row.createdAt)
+          : (event.startedAt || event.endedAt || new Date(0));
         (event as any).ownerId = row.owner_id || '';
         event.sharedAccess = sharesByEvent.get(event.id) || [];
 
@@ -709,8 +732,8 @@ export class Database {
     event.sharedAccess = [];
     this.events.set(event.id, event);
     await this.client.execute(
-      'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-      [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId, event.format]
+      'INSERT INTO events (id, name, courts, totalGamesToPlay, startedAt, endedAt, owner_id, format, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [event.id, event.name, event.courts, event.totalGamesToPlay, null, null, ownerId, event.format, event.createdAt.toISOString()]
     );
     return event;
   }

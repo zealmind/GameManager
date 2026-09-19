@@ -322,6 +322,107 @@ body.hide-bottom-nav .bottom-nav {
     color: var(--text-secondary);
 }
 
+.events-list-group {
+    margin-bottom: 16px;
+}
+
+.events-list-group:last-child {
+    margin-bottom: 0;
+}
+
+.events-list-group-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0 0 8px 2px;
+    color: var(--text-secondary);
+}
+
+.events-list-group-title-active {
+    color: #065f46;
+}
+
+.events-list-group-title-upcoming {
+    color: #92400e;
+}
+
+.events-list-group-title-ended {
+    color: #6b7280;
+}
+
+.list-item.event-status-upcoming {
+    background: #fffbeb;
+    border-left: 4px solid #d97706;
+}
+
+.list-item.event-status-active {
+    background: #f0fdf4;
+    border-left: 4px solid #16a34a;
+}
+
+.list-item.event-status-ended {
+    position: relative;
+    overflow: hidden;
+    background: #f3f4f6;
+    border-left: 4px solid #9ca3af;
+}
+
+.list-item.event-status-ended > *:not(.event-ended-lock-overlay) {
+    position: relative;
+    z-index: 1;
+}
+
+.event-ended-lock-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: linear-gradient(
+        90deg,
+        rgba(243, 244, 246, 0.15) 0%,
+        rgba(209, 213, 219, 0.45) 100%
+    );
+    pointer-events: none;
+    border-radius: inherit;
+}
+
+.event-ended-lock-icon {
+    position: absolute;
+    left: 60%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    color: #9ca3af;
+    opacity: 0.55;
+    user-select: none;
+}
+
+.event-status-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+
+.event-status-badge-upcoming {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.event-status-badge-active {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.event-status-badge-ended {
+    background: #e5e7eb;
+    color: #4b5563;
+}
+
 .players-toolbar {
     display: flex;
     gap: 8px;

@@ -121,6 +121,7 @@ class MockClient {
         endedAt: args[5],
         owner_id: args[6],
         format: args[7] ?? 'ROTATING_DOUBLES',
+        createdAt: args[8] ?? null,
       };
       const idx = this.data.events.findIndex(i => i.id === row.id);
       if (idx >= 0) this.data.events[idx] = row;
